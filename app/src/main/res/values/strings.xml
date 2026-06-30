@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DJ Assistant</string>
+    <string name="notification_channel_name">DJ Assistant</string>
+    <string name="notification_channel_description">Голосовое управление музыкой</string>
+    <string name="notification_service_running">DJ Assistant работает</string>
+</resources>
