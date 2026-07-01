@@ -210,17 +210,18 @@ class VoiceEngine @Inject constructor(
         val normalizedText = TextNormalizer.normalize(rawText.stripWakeWord())
         val intent = intentRecognizer.recognize(rawText)
         val threshold = currentSettings.voskConfidenceThreshold
+        val confidence = result.confidence
 
-        if (result.confidence != null && result.confidence < threshold) {
-            DjLogger.voice("Rejected (confidence ${result.confidence} < $threshold): \"$rawText\"")
+        if (confidence != null && confidence < threshold) {
+            DjLogger.voice("Rejected (confidence $confidence < $threshold): \"$rawText\"")
             recordAndFinish(
                 rawText = rawText,
                 normalizedText = normalizedText,
-                confidence = result.confidence,
+                confidence = confidence,
                 intent = intent,
                 actionLabel = "None",
                 executionResult = "Rejected",
-                rejectReason = "Low confidence (${formatPercent(result.confidence)} < ${formatPercent(threshold)})",
+                rejectReason = "Low confidence (${formatPercent(confidence)} < ${formatPercent(threshold)})",
                 startTime = startTime
             )
             return null
@@ -236,7 +237,7 @@ class VoiceEngine @Inject constructor(
             recordAndFinish(
                 rawText = rawText,
                 normalizedText = normalizedText,
-                confidence = result.confidence,
+                confidence = confidence,
                 intent = intent,
                 actionLabel = intent.label(),
                 executionResult = "Mode switched to ${newMode.name}",
