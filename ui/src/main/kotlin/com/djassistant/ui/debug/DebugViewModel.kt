@@ -2,6 +2,7 @@ package com.djassistant.ui.debug
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.djassistant.core.logging.DjLogBuffer
 import com.djassistant.data.log.UnknownCommandEntry
 import com.djassistant.data.log.UnknownCommandLogger
 import com.djassistant.feature.media.MediaPlaybackState
@@ -34,6 +35,10 @@ class DebugViewModel @Inject constructor(
     val lastCommandInfo: StateFlow<String?> = serviceStateHolder.lastCommandInfo
 
     val mediaState: StateFlow<MediaPlaybackState> = mediaStateProvider.state
+
+    val lastError: StateFlow<DjLogBuffer.Entry?> = DjLogBuffer.lastError
+
+    val recentLogs: StateFlow<List<DjLogBuffer.Entry>> = DjLogBuffer.entries
 
     val recentUnknownCommands: StateFlow<List<UnknownCommandEntry>> = flow {
         while (true) {

@@ -21,7 +21,8 @@ fun DjNavGraph(
         composable(Screen.Main.route) {
             MainScreen(
                 appVersion = appVersion,
-                onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
+                onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
+                onNavigateToDebug = { navController.navigate(Screen.Debug.route) }
             )
         }
 
@@ -33,6 +34,7 @@ fun DjNavGraph(
 
         composable(Screen.Debug.route) {
             DebugScreen(
+                appVersion = appVersion,
                 onNavigateBack = { navController.popBackStack() }
             )
         }

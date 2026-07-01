@@ -14,9 +14,22 @@ Sprint 7  ░░░░░░░░░░░░░░░░░░░░    0%
 
 ---
 
-## ✅ Sprint 1 — Каркас проекта (завершён 2026-06-30)
+## ✅ Sprint 1 — Каркас проекта + стабилизация (завершён 2026-07-01)
 
-**Результат:** Проект открывается в Android Studio, собирается и запускается на устройстве.
+**Результат:** Проект открывается в Android Studio, собирается и запускается на устройстве. После ручного тестирования выполнен проход Bug Fix & Production Ready.
+
+### Проход Bug Fix & Production Ready (2026-07-01)
+
+- [x] Runtime permissions: автозапрос `RECORD_AUDIO` + `POST_NOTIFICATIONS`
+- [x] «Умная» кнопка «Запустить» (grant / deny / permanently-denied → настройки)
+- [x] Приложение не падает при отсутствии разрешений (`try/catch` вокруг `startForeground`)
+- [x] Идемпотентный старт/остановка сервиса, защита от повторного создания
+- [x] Чек-лист готовности на главном экране (✓ Микрофон / ✓ Уведомления / ✓ Сервис)
+- [x] Debug Screen полностью реализован (Вариант А) и доступен по переключателю
+- [x] Расширенное логирование ошибок (`DjLogBuffer`, `DjLogger.*Error`)
+- [x] CHANGELOG.md создан; ROADMAP / PROJECT_STATE / DECISIONS обновлены
+
+### Изначальный каркас (2026-06-30)
 
 - [x] Multi-module Gradle (app / core / data / feature / service / ui)
 - [x] Version Catalog (libs.versions.toml)

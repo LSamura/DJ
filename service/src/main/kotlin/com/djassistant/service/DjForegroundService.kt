@@ -24,6 +24,10 @@ class DjForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    // Tracks whether startForeground() has already succeeded, so a repeated
+    // ACTION_START does not attempt to enter the foreground twice.
+    private var isForegroundActive = false
+
     override fun onCreate() {
         super.onCreate()
         DjLogger.service("onCreate()")
@@ -34,30 +38,66 @@ class DjForegroundService : Service() {
         DjLogger.service("onStartCommand action=${intent?.action}")
         return when (intent?.action) {
             ACTION_START -> {
-                startForegroundWithNotification()
-                serviceStateHolder.updateMode(ServiceMode.Running)
+                startForegroundSafely()
                 START_STICKY
             }
             ACTION_STOP -> {
-                stopSelf()
+                stopServiceCleanly()
                 START_NOT_STICKY
             }
-            else -> START_NOT_STICKY
+            else -> {
+                // Unexpected / null intent (e.g. system-redelivered). Do not
+                // crash: if we never entered the foreground, just stop.
+                DjLogger.w("DJ/Service", "onStartCommand with no action; stopping if idle")
+                if (!isForegroundActive) stopSelf()
+                START_NOT_STICKY
+            }
         }
     }
 
     override fun onDestroy() {
         DjLogger.service("onDestroy()")
-        serviceStateHolder.updateMode(ServiceMode.Stopped)
+        if (isForegroundActive) {
+            isForegroundActive = false
+            serviceStateHolder.updateMode(ServiceMode.Stopped)
+        }
         serviceScope.cancel()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startForegroundWithNotification() {
-        val notification = notificationHelper.buildServiceNotification()
-        startForeground(NotificationHelper.NOTIFICATION_ID, notification)
-        DjLogger.service("Foreground service started")
+    private fun startForegroundSafely() {
+        if (isForegroundActive) {
+            DjLogger.service("startForeground ignored — already in foreground")
+            serviceStateHolder.updateMode(ServiceMode.Running)
+            return
+        }
+        serviceStateHolder.updateMode(ServiceMode.Starting)
+        try {
+            val notification = notificationHelper.buildServiceNotification()
+            startForeground(NotificationHelper.NOTIFICATION_ID, notification)
+            isForegroundActive = true
+            serviceStateHolder.updateMode(ServiceMode.Running)
+            DjLogger.service("Foreground service started")
+        } catch (e: Exception) {
+            // On Android 14+ startForeground with a microphone type throws if
+            // RECORD_AUDIO is missing. Never let that crash the process.
+            DjLogger.serviceError("Failed to start foreground service", e)
+            isForegroundActive = false
+            serviceStateHolder.updateMode(
+                ServiceMode.Error(e.message ?: "не удалось запустить сервис")
+            )
+            stopSelf()
+        }
+    }
+
+    private fun stopServiceCleanly() {
+        DjLogger.service("Stopping foreground service")
+        isForegroundActive = false
+        serviceStateHolder.updateMode(ServiceMode.Stopped)
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            .onFailure { DjLogger.serviceError("stopForeground failed", it) }
+        stopSelf()
     }
 }

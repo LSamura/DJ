@@ -24,19 +24,33 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.djassistant.core.logging.DjLogBuffer
 import com.djassistant.ui.components.AudioLevelBar
 import com.djassistant.ui.components.StatusIndicator
+import com.djassistant.ui.permissions.AppPermissions
 import com.djassistant.ui.theme.DjRed
 import com.djassistant.ui.theme.SurfaceVariantDark
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DebugScreen(
+    appVersion: String,
     onNavigateBack: () -> Unit,
     viewModel: DebugViewModel = hiltViewModel()
 ) {
@@ -46,6 +60,22 @@ fun DebugScreen(
     val lastInfo by viewModel.lastCommandInfo.collectAsStateWithLifecycle()
     val mediaState by viewModel.mediaState.collectAsStateWithLifecycle()
     val unknownCommands by viewModel.recentUnknownCommands.collectAsStateWithLifecycle()
+    val lastError by viewModel.lastError.collectAsStateWithLifecycle()
+    val recentLogs by viewModel.recentLogs.collectAsStateWithLifecycle()
+
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var permissionStatus by remember { mutableStateOf(AppPermissions.status(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permissionStatus = AppPermissions.status(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Scaffold(
         topBar = {
@@ -74,11 +104,39 @@ fun DebugScreen(
                 .padding(horizontal = 16.dp)
         ) {
 
+            DebugSection("Приложение") {
+                DebugRow("Версия") { DebugValue("v$appVersion") }
+            }
+
             DebugSection("Сервис") {
                 DebugRow("Режим") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         StatusIndicator(mode = serviceMode, size = 12.dp)
                         Text(serviceMode.displayName(), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
+            DebugSection("Разрешения") {
+                DebugRow("Микрофон") { DebugValue(if (permissionStatus.microphone) "Выдано" else "Нет") }
+                DebugRow("Уведомления") { DebugValue(if (permissionStatus.notifications) "Выдано" else "Нет") }
+            }
+
+            DebugSection("Последняя ошибка") {
+                if (lastError == null) {
+                    Text(
+                        "Ошибок нет",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                } else {
+                    lastError?.let { err ->
+                        Text(
+                            text = "[${formatTime(err.timestampMs)}] ${err.tag}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = DjRed
+                        )
+                        Text(text = err.message, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -100,6 +158,26 @@ fun DebugScreen(
                 DebugRow("Исполнитель") { DebugValue(mediaState.artist ?: "—") }
                 DebugRow("Громкость") { DebugValue("${mediaState.volumePercent}%") }
                 DebugRow("Приложение") { DebugValue(mediaState.activeAppName ?: "—") }
+            }
+
+            DebugSection("Журнал (${recentLogs.size})") {
+                if (recentLogs.isEmpty()) {
+                    Text(
+                        "Нет записей",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                } else {
+                    recentLogs.takeLast(15).reversed().forEach { entry ->
+                        Text(
+                            text = "[${formatTime(entry.timestampMs)}] ${entry.level} ${entry.tag}: ${entry.message}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (entry.level == DjLogBuffer.Level.ERROR) DjRed
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(vertical = 1.dp)
+                        )
+                    }
+                }
             }
 
             DebugSection("Неизвестные команды (${unknownCommands.size})") {
@@ -131,6 +209,10 @@ fun DebugScreen(
         }
     }
 }
+
+private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+private fun formatTime(timestampMs: Long): String = timeFormat.format(Date(timestampMs))
 
 @Composable
 private fun DebugSection(title: String, content: @Composable () -> Unit) {
