@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.djassistant.feature.settings.DjSettings
 import com.djassistant.feature.settings.SettingsRepository
+import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -38,5 +39,9 @@ class SettingsViewModel @Inject constructor(
 
     fun setDialogWindowSeconds(seconds: Int) {
         viewModelScope.launch { settingsRepository.setDialogWindowSeconds(seconds) }
+    }
+
+    fun setMicrophoneSource(source: MicrophoneSource) {
+        viewModelScope.launch { settingsRepository.setMicrophoneSource(source) }
     }
 }

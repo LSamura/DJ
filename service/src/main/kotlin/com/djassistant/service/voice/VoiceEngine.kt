@@ -14,6 +14,7 @@ import com.djassistant.feature.intent.IntentRecognizer
 import com.djassistant.feature.settings.DjSettings
 import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.voice.AudioRecorder
+import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.RecognitionResult
 import com.djassistant.feature.voice.SpeechRecognizer
 import com.djassistant.feature.voice.TextNormalizer
@@ -30,10 +31,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -62,6 +60,14 @@ import kotlinx.coroutines.launch
  * Mode-switch intents (SetContinuousMode/SetWakeMode) are handled here and
  * never reach [CommandDispatcher] — they are a Voice Layer concern, not a
  * Media Layer one.
+ *
+ * Bluetooth microphone lifecycle (Sprint 3.1 follow-up): the wake-word
+ * waiting phase is a genuinely idle state and always uses the phone
+ * microphone — it never opens a Bluetooth SCO connection. Only the "actually
+ * recording a command" phase (the dialog window in Wake Mode, or the whole
+ * session in Continuous Mode) opens SCO, and only when the user explicitly
+ * selected [MicrophoneSource.BLUETOOTH]; it is closed the moment that
+ * phase ends. See ADR in DECISIONS.md.
  */
 @Singleton
 class VoiceEngine @Inject constructor(
@@ -115,21 +121,26 @@ class VoiceEngine @Inject constructor(
             settingsRepository.settings.collect { currentSettings = it }
         }
 
-        // Eagerly shared so the mic stays open across wake-word <-> dialog
-        // transitions instead of restarting AudioRecord on every switch.
-        val sharedAudioFlow = audioRecorder.start().shareIn(engineScope, SharingStarted.Eagerly)
-
         while (engineScope.isActive) {
             when (currentListeningMode) {
-                VoiceListeningMode.CONTINUOUS -> runContinuousSession(sharedAudioFlow)
-                VoiceListeningMode.WAKE_WORD -> runWakeWordSession(sharedAudioFlow)
+                VoiceListeningMode.CONTINUOUS -> runContinuousSession()
+                VoiceListeningMode.WAKE_WORD -> runWakeWordSession()
             }
         }
     }
 
-    private suspend fun runContinuousSession(audioFlow: SharedFlow<ByteArray>) {
+    /** Only an explicit Bluetooth selection ever opens SCO — AUTO/PHONE always use the phone mic. */
+    private fun resolveAllowBluetooth(): Boolean =
+        currentSettings.microphoneSource == MicrophoneSource.BLUETOOTH
+
+    private suspend fun runContinuousSession() {
         voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
         serviceStateHolder.updateMode(ServiceMode.Listening)
+
+        // Continuous mode has no idle/active split — the whole session IS
+        // "recording a voice command", so the configured mic source (which
+        // may open Bluetooth SCO) applies for its entire duration.
+        val audioFlow = audioRecorder.start(allowBluetooth = resolveAllowBluetooth())
 
         var switchRequested = false
         speechRecognizer.startListening(audioFlow)
@@ -143,16 +154,23 @@ class VoiceEngine @Inject constructor(
                     switchRequested = true
                 }
             }
+        audioRecorder.stop()
 
         reportIfModelMissing()
         if (!speechRecognizer.isReady) delay(2_000)
     }
 
-    private suspend fun runWakeWordSession(audioFlow: SharedFlow<ByteArray>) {
+    private suspend fun runWakeWordSession() {
         voiceStateHolder.updateEngineState(VoiceEngineState.WaitingForWakeWord)
         serviceStateHolder.updateMode(ServiceMode.Running)
 
-        val detected = wakeWordDetector.waitForWakeWord(audioFlow)
+        // Idle: waiting for the activation phrase is never a reason to touch
+        // Bluetooth — always the phone microphone here, regardless of the
+        // configured MicrophoneSource.
+        val wakeAudioFlow = audioRecorder.start(allowBluetooth = false)
+        val detected = wakeWordDetector.waitForWakeWord(wakeAudioFlow)
+        audioRecorder.stop()
+
         if (!detected) {
             reportIfModelMissing()
             if (!speechRecognizer.isReady) delay(2_000)
@@ -163,13 +181,17 @@ class VoiceEngine @Inject constructor(
         voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
         serviceStateHolder.updateMode(ServiceMode.Listening)
 
+        // Active: this is "recording a voice command" — the configured mic
+        // source applies, opening Bluetooth SCO only if explicitly selected,
+        // and only for the duration of this dialog window.
+        val commandAudioFlow = audioRecorder.start(allowBluetooth = resolveAllowBluetooth())
         val windowMs = currentSettings.dialogWindowSeconds * 1000L
         var lastActivityAt = SystemClock.elapsedRealtime()
         var switchRequested = false
 
         coroutineScope {
             val collectJob = launch {
-                speechRecognizer.startListening(audioFlow)
+                speechRecognizer.startListening(commandAudioFlow)
                     .takeWhile { !switchRequested }
                     .collect { result ->
                         voiceStateHolder.setModelLoaded(true)
@@ -189,6 +211,11 @@ class VoiceEngine @Inject constructor(
                 }
             }
         }
+        // "Disable SCO immediately after recognition finishes" — this ends
+        // the dialog window's recording session (and any Bluetooth SCO it
+        // opened) right away; the next loop iteration goes back to
+        // wake-word waiting, which never touches Bluetooth.
+        audioRecorder.stop()
     }
 
     /** If the flow ended without ever emitting, the model likely failed to load. */
@@ -253,7 +280,7 @@ class VoiceEngine @Inject constructor(
         recordAndFinish(
             rawText = rawText,
             normalizedText = normalizedText,
-            confidence = result.confidence,
+            confidence = confidence,
             intent = intent,
             actionLabel = commandResult.actionLabel(intent),
             executionResult = commandResult.executionResultLabel(),

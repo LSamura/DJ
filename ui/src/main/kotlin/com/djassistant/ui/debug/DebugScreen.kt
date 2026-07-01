@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.djassistant.core.logging.DjLogBuffer
 import com.djassistant.feature.media.PlaybackSource
+import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
 import com.djassistant.service.voice.VoiceEngineState
 import com.djassistant.ui.components.AudioLevelBar
@@ -166,7 +167,8 @@ fun DebugScreen(
                 Spacer(modifier = Modifier.height(4.dp))
                 AudioLevelBar(level = audioLevel, modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(8.dp))
-                DebugRow("Источник микрофона") { DebugValue(activeInputSource) }
+                DebugRow("Настройка источника") { DebugValue(settings.microphoneSource.displayName()) }
+                DebugRow("Активный источник сейчас") { DebugValue(activeInputSource) }
             }
 
             DebugSection("Voice") {
@@ -310,6 +312,12 @@ private fun PlaybackSource.displayName(): String = when (this) {
 private fun VoiceListeningMode.displayName(): String = when (this) {
     VoiceListeningMode.CONTINUOUS -> "Continuous"
     VoiceListeningMode.WAKE_WORD -> "Wake Mode"
+}
+
+private fun MicrophoneSource.displayName(): String = when (this) {
+    MicrophoneSource.AUTO -> "Auto"
+    MicrophoneSource.PHONE -> "Phone"
+    MicrophoneSource.BLUETOOTH -> "Bluetooth"
 }
 
 @Composable

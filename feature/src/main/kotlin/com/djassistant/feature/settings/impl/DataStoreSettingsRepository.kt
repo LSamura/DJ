@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.djassistant.feature.settings.DjSettings
 import com.djassistant.feature.settings.SettingsRepository
+import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -31,6 +32,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val VOSK_CONFIDENCE_THRESHOLD = floatPreferencesKey("vosk_confidence_threshold")
         val LISTENING_MODE = stringPreferencesKey("listening_mode")
         val DIALOG_WINDOW_SECONDS = intPreferencesKey("dialog_window_seconds")
+        val MICROPHONE_SOURCE = stringPreferencesKey("microphone_source")
     }
 
     override val settings: Flow<DjSettings> = context.dataStore.data.map { prefs ->
@@ -41,7 +43,10 @@ class DataStoreSettingsRepository @Inject constructor(
             listeningMode = prefs[Keys.LISTENING_MODE]?.let { raw ->
                 runCatching { VoiceListeningMode.valueOf(raw) }.getOrNull()
             } ?: VoiceListeningMode.CONTINUOUS,
-            dialogWindowSeconds = prefs[Keys.DIALOG_WINDOW_SECONDS] ?: 6
+            dialogWindowSeconds = prefs[Keys.DIALOG_WINDOW_SECONDS] ?: 6,
+            microphoneSource = prefs[Keys.MICROPHONE_SOURCE]?.let { raw ->
+                runCatching { MicrophoneSource.valueOf(raw) }.getOrNull()
+            } ?: MicrophoneSource.AUTO
         )
     }
 
@@ -63,5 +68,9 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setDialogWindowSeconds(seconds: Int) {
         context.dataStore.edit { it[Keys.DIALOG_WINDOW_SECONDS] = seconds.coerceIn(3, 15) }
+    }
+
+    override suspend fun setMicrophoneSource(source: MicrophoneSource) {
+        context.dataStore.edit { it[Keys.MICROPHONE_SOURCE] = source.name }
     }
 }

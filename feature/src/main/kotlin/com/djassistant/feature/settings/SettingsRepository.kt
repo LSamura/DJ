@@ -1,5 +1,6 @@
 package com.djassistant.feature.settings
 
+import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
 import kotlinx.coroutines.flow.Flow
 
@@ -10,4 +11,5 @@ interface SettingsRepository {
     suspend fun setVoskConfidenceThreshold(value: Float)
     suspend fun setListeningMode(mode: VoiceListeningMode)
     suspend fun setDialogWindowSeconds(seconds: Int)
+    suspend fun setMicrophoneSource(source: MicrophoneSource)
 }

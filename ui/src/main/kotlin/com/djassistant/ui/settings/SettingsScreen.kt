@@ -43,6 +43,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
 import com.djassistant.ui.permissions.NotificationAccess
 import com.djassistant.ui.theme.StatusRunning
@@ -227,6 +228,40 @@ fun SettingsScreen(
                 steps = 11,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            ListItem(
+                headlineContent = { Text("Источник микрофона") },
+                supportingContent = {
+                    Text(
+                        "Auto и Phone никогда не включают Bluetooth-гарнитуру; " +
+                            "Bluetooth используется только если выбран явно"
+                    )
+                }
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = settings.microphoneSource == MicrophoneSource.AUTO,
+                    onClick = { viewModel.setMicrophoneSource(MicrophoneSource.AUTO) },
+                    label = { Text("Auto") }
+                )
+                FilterChip(
+                    selected = settings.microphoneSource == MicrophoneSource.PHONE,
+                    onClick = { viewModel.setMicrophoneSource(MicrophoneSource.PHONE) },
+                    label = { Text("Phone") }
+                )
+                FilterChip(
+                    selected = settings.microphoneSource == MicrophoneSource.BLUETOOTH,
+                    onClick = { viewModel.setMicrophoneSource(MicrophoneSource.BLUETOOTH) },
+                    label = { Text("Bluetooth") }
+                )
+            }
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }

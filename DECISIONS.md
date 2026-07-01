@@ -293,9 +293,35 @@ core → []
 
 ---
 
-## ADR-029 | 2026-07-01
+## ADR-029 | 2026-07-01 (superseded by ADR-030/031)
 ### Bluetooth-микрофон — автоматический выбор без ручного переключателя
 
 **Решение:** `AndroidAudioRecorder` при каждом запуске ищет подключённое Bluetooth SCO-устройство через `AudioManager.getDevices(GET_DEVICES_INPUTS)`; если найдено — активирует `startBluetoothSco()` и назначает `AudioRecord.preferredDevice`, иначе использует встроенный микрофон. Активный источник виден в Debug Screen через `AudioRecorder.activeInputSource`. Ручной переключатель ("Auto/Built-in/Bluetooth") в Settings не добавлен.
 
 **Причина:** Бриф Sprint 3.1 разрешал этот вариант явно: «если ручной выбор невозможен из-за ограничений Android API — оставить автоматический выбор и вывести информацию о текущем источнике записи в Debug Screen». Android не предоставляет декларативного публичного API уровня приложения для гарантированного ручного выбора входного устройства (в отличие от вывода, где `AudioManager`/`MediaRouter` дают больше контроля) без более глубокой работы с `AudioDeviceCallback`/`AudioPlaybackConfiguration`, которая выходит за рамки этого спринта и не может быть протестирована в среде без реального Bluetooth-устройства.
+
+**Заменено:** пользователь указал, что это решение держало SCO активным всё время работы движка (включая ожидание wake word), оставляя Bluetooth-гарнитуру в режиме "звонка" дольше необходимого. См. ADR-030 и ADR-031 для редизайна.
+
+---
+
+## ADR-030 | 2026-07-01
+### `MicrophoneSource` — явный выбор пользователя вместо скрытого автовыбора
+
+**Решение:** Добавлена настройка `DjSettings.microphoneSource: MicrophoneSource` (`AUTO` / `PHONE` / `BLUETOOTH`, по умолчанию `AUTO`), персистится через `DataStoreSettingsRepository`, выбирается тремя чипами в `SettingsScreen`. `AUTO` и `PHONE` ведут себя идентично — оба никогда не вызывают Bluetooth SCO API вообще. Только явный выбор `BLUETOOTH` включает логику Bluetooth-роутинга.
+
+**Причина:** Прямое требование: «In Auto mode, prefer the phone microphone unless Bluetooth input is explicitly required». Реализовано буквально и консервативно — раз обычный телефонный микрофон всегда доступен, «явно требуется Bluetooth» интерпретируется как «пользователь сам выбрал Bluetooth», а не как эвристика на основе того, что где-то рядом есть подключённая гарнитура. Это устраняет и прежнюю жалобу: по умолчанию (AUTO) приложение теперь никогда не трогает Bluetooth SCO.
+
+---
+
+## ADR-031 | 2026-07-01
+### Bluetooth SCO — решение уровня сессии записи, а не рекордера
+
+**Решение:** `AudioRecorder.start(allowBluetooth: Boolean = false)` — Bluetooth больше не выбирается автоматически внутри `AndroidAudioRecorder`; вызывающая сторона (`VoiceEngine`) решает для каждой конкретной сессии записи, разрешён ли Bluetooth. `VoiceEngine` убрал единый `shareIn`-разделяемый аудиопоток на весь срок жизни движка (Sprint 3.1) и вместо этого открывает отдельную сессию записи для каждой смысловой фазы:
+- Ожидание wake word (Wake Mode) — всегда `allowBluetooth = false`, без исключений, независимо от настройки: это единственное по-настоящему простаивающее состояние, и оно не должно держать гарнитуру в режиме звонка.
+- Диалоговое окно (Wake Mode) и вся сессия Continuous Mode — `allowBluetooth = resolveAllowBluetooth()` (true только если `microphoneSource == BLUETOOTH`); сессия закрывается (`audioRecorder.stop()`) сразу по завершении окна/распознавания.
+
+Дополнительно `AndroidAudioRecorder` дожидается фактического подключения SCO (`BroadcastReceiver` на `AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED`, `withTimeoutOrNull(2000мс)`) перед началом записи через Bluetooth-путь, и вызывает `stopBluetoothSco()` в `finally`-блоке сразу после остановки `AudioRecord`.
+
+**Причина:** Прямые требования: «Do not keep Bluetooth SCO permanently active», «Only enable SCO immediately before recording a voice command», «Disable SCO immediately after recognition finishes», «Restore A2DP playback as quickly as possible», «The Voice Service must never keep Bluetooth headphones in call mode while idle». Привязка SCO к жизненному циклу конкретной сессии записи (а не к жизненному циклу всего движка) — единственный способ буквально выполнить все пять требований одновременно.
+
+**Ограничение:** в Continuous Mode с явно выбранным `BLUETOOTH` SCO неизбежно остаётся активным на всё время сессии — этот режим по определению не имеет состояния простоя (движок всегда что-то распознаёт). Это осознанный компромисс, а не недосмотр: пользователь явно выбирает Bluetooth, зная о continuous-семантике.
