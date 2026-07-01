@@ -3,7 +3,9 @@ package com.djassistant.feature.voice.impl
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import androidx.core.content.ContextCompat
@@ -27,6 +29,12 @@ private const val SAMPLE_RATE_HZ = 16_000
  * expects. The recording loop is cooperative: it exits as soon as either
  * [stop] flips [isRecording] to false or the collecting coroutine is
  * cancelled, and always releases the microphone in its `finally` block.
+ *
+ * If a Bluetooth headset with a microphone is connected, its SCO input is
+ * used automatically (best-effort — Android doesn't expose a simple manual
+ * picker API for this, see ADR on mic source selection in DECISIONS.md).
+ * The currently active source is exposed via [activeInputSource] for the
+ * Debug Screen.
  */
 @Singleton
 class AndroidAudioRecorder @Inject constructor(
@@ -38,6 +46,9 @@ class AndroidAudioRecorder @Inject constructor(
 
     private val _isRecording = MutableStateFlow(false)
     override val isRecording: StateFlow<Boolean> = _isRecording
+
+    private val _activeInputSource = MutableStateFlow("—")
+    override val activeInputSource: StateFlow<String> = _activeInputSource
 
     override fun start(): Flow<ByteArray> = flow {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
@@ -76,11 +87,13 @@ class AndroidAudioRecorder @Inject constructor(
             return@flow
         }
 
+        val scoStarted = tryRouteToBluetooth(record)
+
         val buffer = ByteArray(minBufferSize)
         try {
             record.startRecording()
             _isRecording.value = true
-            DjLogger.voice("AudioRecord started ($SAMPLE_RATE_HZ Hz mono PCM16)")
+            DjLogger.voice("AudioRecord started ($SAMPLE_RATE_HZ Hz mono PCM16, source=${_activeInputSource.value})")
 
             while (_isRecording.value && currentCoroutineContext().isActive) {
                 val read = record.read(buffer, 0, buffer.size)
@@ -92,7 +105,9 @@ class AndroidAudioRecorder @Inject constructor(
         } finally {
             runCatching { record.stop() }
             record.release()
+            if (scoStarted) stopBluetoothSco()
             _audioLevel.value = 0f
+            _activeInputSource.value = "—"
             DjLogger.voice("AudioRecord released")
         }
     }
@@ -100,6 +115,55 @@ class AndroidAudioRecorder @Inject constructor(
     override fun stop() {
         DjLogger.voice("AndroidAudioRecorder.stop()")
         _isRecording.value = false
+    }
+
+    /** Best-effort: routes input to a connected Bluetooth SCO device if one is available. */
+    private fun tryRouteToBluetooth(record: AudioRecord): Boolean {
+        val audioManager = runCatching {
+            context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        }.getOrNull() ?: run {
+            _activeInputSource.value = "Встроенный микрофон"
+            return false
+        }
+
+        val bluetoothDevice = runCatching {
+            audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+        }.getOrNull()
+
+        if (bluetoothDevice == null) {
+            _activeInputSource.value = "Встроенный микрофон"
+            return false
+        }
+
+        val started = runCatching {
+            @Suppress("DEPRECATION")
+            audioManager.startBluetoothSco()
+            @Suppress("DEPRECATION")
+            audioManager.isBluetoothScoOn = true
+            true
+        }.onFailure {
+            DjLogger.voiceError("Failed to start Bluetooth SCO", it)
+        }.getOrDefault(false)
+
+        if (started) {
+            runCatching { record.preferredDevice = bluetoothDevice }
+                .onFailure { DjLogger.voiceError("Failed to set preferred input device", it) }
+            _activeInputSource.value = "Bluetooth"
+        } else {
+            _activeInputSource.value = "Встроенный микрофон"
+        }
+        return started
+    }
+
+    private fun stopBluetoothSco() {
+        runCatching {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            @Suppress("DEPRECATION")
+            audioManager.isBluetoothScoOn = false
+            @Suppress("DEPRECATION")
+            audioManager.stopBluetoothSco()
+        }.onFailure { DjLogger.voiceError("Failed to stop Bluetooth SCO", it) }
     }
 
     private fun computeLevel(buffer: ByteArray, length: Int): Float {

@@ -7,6 +7,8 @@ import com.djassistant.data.log.UnknownCommandEntry
 import com.djassistant.data.log.UnknownCommandLogger
 import com.djassistant.feature.media.MediaPlaybackState
 import com.djassistant.feature.media.MediaStateProvider
+import com.djassistant.feature.settings.DjSettings
+import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.voice.AudioRecorder
 import com.djassistant.service.ServiceMode
 import com.djassistant.service.ServiceStateHolder
@@ -27,12 +29,14 @@ class DebugViewModel @Inject constructor(
     private val audioRecorder: AudioRecorder,
     private val mediaStateProvider: MediaStateProvider,
     private val unknownCommandLogger: UnknownCommandLogger,
-    private val voiceStateHolder: VoiceStateHolder
+    private val voiceStateHolder: VoiceStateHolder,
+    settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     val serviceMode: StateFlow<ServiceMode> = serviceStateHolder.mode
 
     val audioLevel: StateFlow<Float> = audioRecorder.audioLevel
+    val activeInputSource: StateFlow<String> = audioRecorder.activeInputSource
 
     val mediaState: StateFlow<MediaPlaybackState> = mediaStateProvider.state
 
@@ -42,12 +46,18 @@ class DebugViewModel @Inject constructor(
 
     val voiceEngineState: StateFlow<VoiceEngineState> = voiceStateHolder.engineState
     val voiceModelLoaded: StateFlow<Boolean> = voiceStateHolder.modelLoaded
-    val voiceLastText: StateFlow<String> = voiceStateHolder.lastRecognizedText
+    val voiceLastRawText: StateFlow<String> = voiceStateHolder.lastRawText
+    val voiceLastNormalizedText: StateFlow<String> = voiceStateHolder.lastNormalizedText
     val voiceLastConfidence: StateFlow<Float?> = voiceStateHolder.lastConfidence
     val voiceLastIntent: StateFlow<String> = voiceStateHolder.lastIntent
     val voiceLastAction: StateFlow<String> = voiceStateHolder.lastAction
+    val voiceLastExecutionResult: StateFlow<String> = voiceStateHolder.lastExecutionResult
+    val voiceLastRejectReason: StateFlow<String?> = voiceStateHolder.lastRejectReason
     val voiceLastProcessingTimeMs: StateFlow<Long?> = voiceStateHolder.lastProcessingTimeMs
     val voiceRecentCommands: StateFlow<List<VoiceCommandLogEntry>> = voiceStateHolder.recentCommands
+
+    val settings: StateFlow<DjSettings> = settingsRepository.settings
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DjSettings())
 
     val recentUnknownCommands: StateFlow<List<UnknownCommandEntry>> = flow {
         while (true) {

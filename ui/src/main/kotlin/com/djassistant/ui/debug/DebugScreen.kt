@@ -1,5 +1,6 @@
 package com.djassistant.ui.debug
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -39,6 +41,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.djassistant.core.logging.DjLogBuffer
 import com.djassistant.feature.media.PlaybackSource
+import com.djassistant.feature.voice.VoiceListeningMode
 import com.djassistant.service.voice.VoiceEngineState
 import com.djassistant.ui.components.AudioLevelBar
 import com.djassistant.ui.components.StatusIndicator
@@ -59,18 +62,23 @@ fun DebugScreen(
 ) {
     val serviceMode by viewModel.serviceMode.collectAsStateWithLifecycle()
     val audioLevel by viewModel.audioLevel.collectAsStateWithLifecycle()
+    val activeInputSource by viewModel.activeInputSource.collectAsStateWithLifecycle()
     val mediaState by viewModel.mediaState.collectAsStateWithLifecycle()
     val unknownCommands by viewModel.recentUnknownCommands.collectAsStateWithLifecycle()
     val lastError by viewModel.lastError.collectAsStateWithLifecycle()
     val recentLogs by viewModel.recentLogs.collectAsStateWithLifecycle()
     val voiceEngineState by viewModel.voiceEngineState.collectAsStateWithLifecycle()
     val voiceModelLoaded by viewModel.voiceModelLoaded.collectAsStateWithLifecycle()
-    val voiceLastText by viewModel.voiceLastText.collectAsStateWithLifecycle()
+    val voiceLastRawText by viewModel.voiceLastRawText.collectAsStateWithLifecycle()
+    val voiceLastNormalizedText by viewModel.voiceLastNormalizedText.collectAsStateWithLifecycle()
     val voiceLastConfidence by viewModel.voiceLastConfidence.collectAsStateWithLifecycle()
     val voiceLastIntent by viewModel.voiceLastIntent.collectAsStateWithLifecycle()
     val voiceLastAction by viewModel.voiceLastAction.collectAsStateWithLifecycle()
+    val voiceLastExecutionResult by viewModel.voiceLastExecutionResult.collectAsStateWithLifecycle()
+    val voiceLastRejectReason by viewModel.voiceLastRejectReason.collectAsStateWithLifecycle()
     val voiceLastProcessingTimeMs by viewModel.voiceLastProcessingTimeMs.collectAsStateWithLifecycle()
     val voiceRecentCommands by viewModel.voiceRecentCommands.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -157,17 +165,28 @@ fun DebugScreen(
                 DebugLabel("Уровень сигнала")
                 Spacer(modifier = Modifier.height(4.dp))
                 AudioLevelBar(level = audioLevel, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(8.dp))
+                DebugRow("Источник микрофона") { DebugValue(activeInputSource) }
             }
 
             DebugSection("Voice") {
                 DebugRow("Voice Service") { DebugValue(voiceEngineState.displayName()) }
+                DebugRow("Режим") { DebugValue(settings.listeningMode.displayName()) }
                 DebugRow("Vosk") { DebugValue(if (voiceModelLoaded) "Модель загружена" else "Модель не загружена") }
-                DebugRow("Последняя фраза") { DebugValue(voiceLastText.ifBlank { "—" }) }
+                DebugRow("Raw Text") { DebugValue(voiceLastRawText.ifBlank { "—" }) }
+                DebugRow("Normalized Text") { DebugValue(voiceLastNormalizedText.ifBlank { "—" }) }
                 DebugRow("Confidence") {
                     DebugValue(voiceLastConfidence?.let { "%.0f%%".format(it * 100) } ?: "—")
                 }
                 DebugRow("Intent") { DebugValue(voiceLastIntent) }
                 DebugRow("Action") { DebugValue(voiceLastAction) }
+                DebugRow("Execution Result") { DebugValue(voiceLastExecutionResult) }
+                DebugRow("Reject Reason") {
+                    DebugValue(
+                        voiceLastRejectReason ?: "—",
+                        color = if (voiceLastRejectReason != null) DjRed else null
+                    )
+                }
                 DebugRow("Время обработки") {
                     DebugValue(voiceLastProcessingTimeMs?.let { "$it мс" } ?: "—")
                 }
@@ -182,10 +201,15 @@ fun DebugScreen(
                     )
                 } else {
                     voiceRecentCommands.asReversed().forEach { entry ->
+                        val confidenceLabel = entry.confidence?.let { "%.0f%%".format(it * 100) } ?: "—"
+                        val outcome = entry.rejectReason ?: entry.executionResult
                         Text(
-                            text = "[${formatTime(entry.timestampMs)}] \"${entry.recognizedText}\" → " +
-                                "${entry.intentLabel} → ${entry.actionLabel} (${entry.processingTimeMs} мс)",
+                            text = "[${formatTime(entry.timestampMs)}] \"${entry.rawText}\" " +
+                                "($confidenceLabel) → ${entry.intentLabel} → $outcome " +
+                                "(${entry.processingTimeMs} мс)",
                             style = MaterialTheme.typography.labelSmall,
+                            color = if (entry.rejectReason != null) DjRed
+                            else MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.padding(vertical = 1.dp)
                         )
                     }
@@ -283,6 +307,11 @@ private fun PlaybackSource.displayName(): String = when (this) {
     PlaybackSource.NO_ACTIVE_SESSION -> "Нет активной сессии"
 }
 
+private fun VoiceListeningMode.displayName(): String = when (this) {
+    VoiceListeningMode.CONTINUOUS -> "Continuous"
+    VoiceListeningMode.WAKE_WORD -> "Wake Mode"
+}
+
 @Composable
 private fun DebugSection(title: String, content: @Composable () -> Unit) {
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
@@ -295,6 +324,7 @@ private fun DebugSection(title: String, content: @Composable () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .animateContentSize()
                 .background(SurfaceVariantDark, shape = MaterialTheme.shapes.medium)
                 .padding(12.dp)
         ) {
@@ -327,6 +357,10 @@ private fun DebugLabel(text: String) {
 }
 
 @Composable
-private fun DebugValue(text: String) {
-    Text(text = text, style = MaterialTheme.typography.bodySmall)
+private fun DebugValue(text: String, color: Color? = null) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = color ?: MaterialTheme.colorScheme.onSurface
+    )
 }

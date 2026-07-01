@@ -15,12 +15,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -28,6 +30,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,6 +43,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.djassistant.feature.voice.VoiceListeningMode
 import com.djassistant.ui.permissions.NotificationAccess
 import com.djassistant.ui.theme.StatusRunning
 
@@ -161,6 +166,67 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            ListItem(
+                headlineContent = { Text("Режим прослушивания") },
+                supportingContent = { Text("Continuous слушает всегда; Wake Mode ждёт \"Диджей\"") }
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = settings.listeningMode == VoiceListeningMode.CONTINUOUS,
+                    onClick = { viewModel.setListeningMode(VoiceListeningMode.CONTINUOUS) },
+                    label = { Text("Continuous") }
+                )
+                FilterChip(
+                    selected = settings.listeningMode == VoiceListeningMode.WAKE_WORD,
+                    onClick = { viewModel.setListeningMode(VoiceListeningMode.WAKE_WORD) },
+                    label = { Text("Wake Mode") }
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            var thresholdSliderValue by remember(settings.voskConfidenceThreshold) {
+                mutableFloatStateOf(settings.voskConfidenceThreshold)
+            }
+            ListItem(
+                headlineContent = { Text("Порог уверенности распознавания") },
+                supportingContent = {
+                    Text("Команды ниже ${(thresholdSliderValue * 100).toInt()}% confidence не выполняются")
+                }
+            )
+            Slider(
+                value = thresholdSliderValue,
+                onValueChange = { thresholdSliderValue = it },
+                onValueChangeFinished = { viewModel.setVoskConfidenceThreshold(thresholdSliderValue) },
+                valueRange = 0.5f..0.95f,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            var windowSliderValue by remember(settings.dialogWindowSeconds) {
+                mutableIntStateOf(settings.dialogWindowSeconds)
+            }
+            ListItem(
+                headlineContent = { Text("Окно диалога после активации") },
+                supportingContent = { Text("$windowSliderValue сек ожидания следующей команды (Wake Mode)") }
+            )
+            Slider(
+                value = windowSliderValue.toFloat(),
+                onValueChange = { windowSliderValue = it.toInt() },
+                onValueChangeFinished = { viewModel.setDialogWindowSeconds(windowSliderValue) },
+                valueRange = 3f..15f,
+                steps = 11,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }

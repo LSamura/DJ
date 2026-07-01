@@ -5,14 +5,20 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import com.djassistant.core.extensions.stripWakeWord
 import com.djassistant.core.logging.DjLogger
 import com.djassistant.feature.command.CommandDispatcher
 import com.djassistant.feature.command.CommandResult
 import com.djassistant.feature.intent.DjIntent
 import com.djassistant.feature.intent.IntentRecognizer
+import com.djassistant.feature.settings.DjSettings
+import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.voice.AudioRecorder
 import com.djassistant.feature.voice.RecognitionResult
 import com.djassistant.feature.voice.SpeechRecognizer
+import com.djassistant.feature.voice.TextNormalizer
+import com.djassistant.feature.voice.VoiceListeningMode
+import com.djassistant.feature.voice.WakeWordDetector
 import com.djassistant.service.ServiceMode
 import com.djassistant.service.ServiceStateHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -22,6 +28,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -36,20 +50,37 @@ import kotlinx.coroutines.launch
  * already used. Runs entirely on [Dispatchers.IO] in its own supervised
  * scope so neither audio capture nor Vosk's blocking native calls ever
  * touch the main thread.
+ *
+ * Supports two listening modes (Sprint 3.1):
+ *  - [VoiceListeningMode.CONTINUOUS] — full command grammar always running
+ *    (Sprint 3 behavior).
+ *  - [VoiceListeningMode.WAKE_WORD] — a cheap [WakeWordDetector] listens for
+ *    the activation phrase; once triggered, full command recognition opens
+ *    for a configurable dialog window and resets on every recognized
+ *    utterance, then falls back to wake-word listening.
+ *
+ * Mode-switch intents (SetContinuousMode/SetWakeMode) are handled here and
+ * never reach [CommandDispatcher] — they are a Voice Layer concern, not a
+ * Media Layer one.
  */
 @Singleton
 class VoiceEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val audioRecorder: AudioRecorder,
     private val speechRecognizer: SpeechRecognizer,
+    private val wakeWordDetector: WakeWordDetector,
     private val intentRecognizer: IntentRecognizer,
     private val commandDispatcher: CommandDispatcher,
+    private val settingsRepository: SettingsRepository,
     private val serviceStateHolder: ServiceStateHolder,
     private val voiceStateHolder: VoiceStateHolder
 ) {
 
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
+
+    @Volatile private var currentSettings = DjSettings()
+    @Volatile private var currentListeningMode = VoiceListeningMode.CONTINUOUS
 
     fun start() {
         if (job?.isActive == true) {
@@ -78,18 +109,90 @@ class VoiceEngine @Inject constructor(
             return
         }
 
-        val audioFlow = audioRecorder.start()
+        currentSettings = settingsRepository.settings.first()
+        currentListeningMode = currentSettings.listeningMode
+        engineScope.launch {
+            settingsRepository.settings.collect { currentSettings = it }
+        }
+
+        // Eagerly shared so the mic stays open across wake-word <-> dialog
+        // transitions instead of restarting AudioRecord on every switch.
+        val sharedAudioFlow = audioRecorder.start().shareIn(engineScope, SharingStarted.Eagerly)
+
+        while (engineScope.isActive) {
+            when (currentListeningMode) {
+                VoiceListeningMode.CONTINUOUS -> runContinuousSession(sharedAudioFlow)
+                VoiceListeningMode.WAKE_WORD -> runWakeWordSession(sharedAudioFlow)
+            }
+        }
+    }
+
+    private suspend fun runContinuousSession(audioFlow: SharedFlow<ByteArray>) {
         voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
         serviceStateHolder.updateMode(ServiceMode.Listening)
 
-        speechRecognizer.startListening(audioFlow).collect { result ->
-            voiceStateHolder.setModelLoaded(true)
-            if (!result.isFinal || result.text.isBlank()) return@collect
-            handleRecognition(result)
+        var switchRequested = false
+        speechRecognizer.startListening(audioFlow)
+            .takeWhile { !switchRequested }
+            .collect { result ->
+                voiceStateHolder.setModelLoaded(true)
+                if (!result.isFinal || result.text.isBlank()) return@collect
+                val modeSwitch = handleRecognition(result)
+                if (modeSwitch == VoiceListeningMode.WAKE_WORD) {
+                    currentListeningMode = VoiceListeningMode.WAKE_WORD
+                    switchRequested = true
+                }
+            }
+
+        reportIfModelMissing()
+        if (!speechRecognizer.isReady) delay(2_000)
+    }
+
+    private suspend fun runWakeWordSession(audioFlow: SharedFlow<ByteArray>) {
+        voiceStateHolder.updateEngineState(VoiceEngineState.WaitingForWakeWord)
+        serviceStateHolder.updateMode(ServiceMode.Running)
+
+        val detected = wakeWordDetector.waitForWakeWord(audioFlow)
+        if (!detected) {
+            reportIfModelMissing()
+            if (!speechRecognizer.isReady) delay(2_000)
+            return
         }
 
-        // The flow completed without ever emitting — most likely the model
-        // could not be loaded (see VoskModelProvisioner logs for the reason).
+        DjLogger.voice("Wake word detected — opening dialog window")
+        voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
+        serviceStateHolder.updateMode(ServiceMode.Listening)
+
+        val windowMs = currentSettings.dialogWindowSeconds * 1000L
+        var lastActivityAt = SystemClock.elapsedRealtime()
+        var switchRequested = false
+
+        coroutineScope {
+            val collectJob = launch {
+                speechRecognizer.startListening(audioFlow)
+                    .takeWhile { !switchRequested }
+                    .collect { result ->
+                        voiceStateHolder.setModelLoaded(true)
+                        if (!result.isFinal || result.text.isBlank()) return@collect
+                        lastActivityAt = SystemClock.elapsedRealtime()
+                        val modeSwitch = handleRecognition(result)
+                        if (modeSwitch == VoiceListeningMode.CONTINUOUS) {
+                            currentListeningMode = VoiceListeningMode.CONTINUOUS
+                            switchRequested = true
+                        }
+                    }
+            }
+            while (collectJob.isActive) {
+                delay(300)
+                if (SystemClock.elapsedRealtime() - lastActivityAt > windowMs) {
+                    collectJob.cancel()
+                }
+            }
+        }
+    }
+
+    /** If the flow ended without ever emitting, the model likely failed to load. */
+    private fun reportIfModelMissing() {
         if (!speechRecognizer.isReady) {
             DjLogger.voiceError("Voice pipeline ended without a loaded model")
             voiceStateHolder.setModelLoaded(false)
@@ -98,26 +201,93 @@ class VoiceEngine @Inject constructor(
         }
     }
 
-    private suspend fun handleRecognition(result: RecognitionResult) {
+    /** Returns the new listening mode if this recognition switched modes, else null. */
+    private suspend fun handleRecognition(result: RecognitionResult): VoiceListeningMode? {
         serviceStateHolder.updateMode(ServiceMode.Recognizing)
         val startTime = SystemClock.elapsedRealtime()
 
-        val intent = intentRecognizer.recognize(result.text)
+        val rawText = result.text
+        val normalizedText = TextNormalizer.normalize(rawText.stripWakeWord())
+        val intent = intentRecognizer.recognize(rawText)
+        val threshold = currentSettings.voskConfidenceThreshold
+
+        if (result.confidence != null && result.confidence < threshold) {
+            DjLogger.voice("Rejected (confidence ${result.confidence} < $threshold): \"$rawText\"")
+            recordAndFinish(
+                rawText = rawText,
+                normalizedText = normalizedText,
+                confidence = result.confidence,
+                intent = intent,
+                actionLabel = "None",
+                executionResult = "Rejected",
+                rejectReason = "Low confidence (${formatPercent(result.confidence)} < ${formatPercent(threshold)})",
+                startTime = startTime
+            )
+            return null
+        }
+
+        if (intent is DjIntent.SetContinuousMode || intent is DjIntent.SetWakeMode) {
+            val newMode = if (intent is DjIntent.SetContinuousMode) {
+                VoiceListeningMode.CONTINUOUS
+            } else {
+                VoiceListeningMode.WAKE_WORD
+            }
+            settingsRepository.setListeningMode(newMode)
+            recordAndFinish(
+                rawText = rawText,
+                normalizedText = normalizedText,
+                confidence = result.confidence,
+                intent = intent,
+                actionLabel = intent.label(),
+                executionResult = "Mode switched to ${newMode.name}",
+                rejectReason = null,
+                startTime = startTime
+            )
+            return newMode
+        }
+
         serviceStateHolder.updateMode(ServiceMode.Processing)
-        val commandResult = commandDispatcher.dispatch(intent, result.text)
+        val commandResult = commandDispatcher.dispatch(intent, rawText)
 
-        val elapsedMs = SystemClock.elapsedRealtime() - startTime
-
-        voiceStateHolder.recordRecognition(
-            recognizedText = result.text,
+        recordAndFinish(
+            rawText = rawText,
+            normalizedText = normalizedText,
             confidence = result.confidence,
-            intentLabel = intent.label(),
+            intent = intent,
             actionLabel = commandResult.actionLabel(intent),
+            executionResult = commandResult.executionResultLabel(),
+            rejectReason = (commandResult as? CommandResult.Failure)?.reason,
+            startTime = startTime
+        )
+        serviceStateHolder.updateLastRecognizedText(rawText)
+        return null
+    }
+
+    private fun recordAndFinish(
+        rawText: String,
+        normalizedText: String,
+        confidence: Float?,
+        intent: DjIntent,
+        actionLabel: String,
+        executionResult: String,
+        rejectReason: String?,
+        startTime: Long
+    ) {
+        val elapsedMs = SystemClock.elapsedRealtime() - startTime
+        voiceStateHolder.recordRecognition(
+            rawText = rawText,
+            normalizedText = normalizedText,
+            confidence = confidence,
+            intentLabel = intent.label(),
+            actionLabel = actionLabel,
+            executionResult = executionResult,
+            rejectReason = rejectReason,
             processingTimeMs = elapsedMs
         )
-        serviceStateHolder.updateLastRecognizedText(result.text)
         serviceStateHolder.updateMode(ServiceMode.Listening)
     }
+
+    private fun formatPercent(value: Float): String = "${(value * 100).toInt()}%"
 
     private fun hasRecordAudioPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -131,10 +301,15 @@ class VoiceEngine @Inject constructor(
         is DjIntent.Stop -> "STOP"
         is DjIntent.VolumeUp -> "VOLUME_UP"
         is DjIntent.VolumeDown -> "VOLUME_DOWN"
+        is DjIntent.SetVolumeMax -> "VOLUME_MAX"
+        is DjIntent.SetVolumeMin -> "VOLUME_MIN"
+        is DjIntent.SetVolumePercent -> "SET_VOLUME_PERCENT($percent)"
         is DjIntent.QueryNowPlaying -> "QUERY_NOW_PLAYING"
         is DjIntent.QueryArtist -> "QUERY_ARTIST"
         is DjIntent.QueryIsPlaying -> "QUERY_IS_PLAYING"
         is DjIntent.QueryVolume -> "QUERY_VOLUME"
+        is DjIntent.SetContinuousMode -> "MODE_CONTINUOUS"
+        is DjIntent.SetWakeMode -> "MODE_WAKE"
         is DjIntent.Unknown -> "UNKNOWN"
     }
 
@@ -143,5 +318,12 @@ class VoiceEngine @Inject constructor(
         is CommandResult.SuccessWithInfo -> intent.label()
         is CommandResult.Failure -> "None"
         is CommandResult.NotSupported -> "None"
+    }
+
+    private fun CommandResult.executionResultLabel(): String = when (this) {
+        is CommandResult.Success -> "Success"
+        is CommandResult.SuccessWithInfo -> message
+        is CommandResult.Failure -> "Failed: $reason"
+        is CommandResult.NotSupported -> "Not Supported"
     }
 }

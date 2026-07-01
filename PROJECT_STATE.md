@@ -1,22 +1,22 @@
 # PROJECT_STATE.md
 
-_Обновлено: 2026-07-01 | Sprint 3 (Offline Voice Control MVP)_
+_Обновлено: 2026-07-01 | Sprint 3.1 (Voice UX & Recognition Improvements)_
 
 ---
 
 ## Текущее состояние
 
-**Sprint 1, Sprint 2 и Sprint 3 реализованы.** Media Layer стабилен и протестирован на реальном устройстве. Voice Layer реализован полностью в коде: микрофон → Vosk → Intent Parser → Media Layer. **Модель Vosk не бандлится в этот репозиторий** (см. «Voice Architecture» и «Известные ограничения» ниже) — это единственное, что мешает прогнать финальный сценарий целиком без ручного шага разработчика.
+**Sprint 1, Sprint 2, Sprint 3 и Sprint 3.1 реализованы.** Media Layer стабилен и протестирован на реальном устройстве. Voice Layer реализован полностью в коде: микрофон → Vosk → Intent Parser → Media Layer, с двумя режимами прослушивания (Continuous/Wake Mode), порогом confidence, расширенным словарём команд и управлением громкостью. **Офлайн-модель Vosk теперь входит в репозиторий** (`feature/src/main/assets/model/`, добавлена после Sprint 3) — прежний блокер снят.
 
 Проект:
 - Открывается в Android Studio
-- Собирается без ошибок (при наличии модели Vosk в assets — см. ниже)
+- Собирается без ошибок
 - Запускается на устройстве Android 8.0+ (minSdk 26)
 - Не падает при отсутствии разрешений — запрашивает их автоматически
 - Сервис стабильно запускается и останавливается, уведомление отображается
 - Управляет реальными плеерами (Spotify, AIMP, YouTube Music и др.) через `MediaController`, с fallback на медиа-клавиши
 - Позиция трека в Debug Screen обновляется плавно (~300 мс), без лишних запросов к MediaSession
-- Голосовой пайплайн работает полностью локально, без интернета
+- Голосовой пайплайн работает полностью локально, без интернета, с confidence-фильтрацией и двумя режимами прослушивания
 
 ---
 
@@ -90,24 +90,117 @@ Wake word НЕ реализован в Sprint 3 (по прямому требо�
 gate ПЕРЕД вызовом `IntentRecognizer.recognize()` (например, в
 `VoiceEngine.handleRecognition()`), не трогая существующий матчинг.
 
-### Ограничение: офлайн-модель Vosk не бандлится
+### Модель Vosk — теперь в репозитории
 
-`VoskModelProvisioner` ожидает готовую модель (например,
-`vosk-model-small-ru-0.22`, ~45 МБ) под `feature/src/main/assets/model/`
-(распакованную, с файлом-маркером `conf/model.conf`). **Эта модель НЕ
-включена в репозиторий и не может быть загружена агентом в этой
-песочнице** — здесь нет ни Android SDK для сборки, ни (проверенного)
-доступа к серверам с бинарными моделями. Разработчику нужно:
-1. Скачать модель с официального сайта Vosk на своей машине.
-2. Распаковать её содержимое в `feature/src/main/assets/model/` (так, чтобы
-   `feature/src/main/assets/model/conf/model.conf` существовал).
-3. Собрать проект в Android Studio.
+`VoskModelProvisioner` ожидает готовую модель под
+`feature/src/main/assets/model/` (распакованную, с файлом-маркером
+`conf/model.conf`) — после Sprint 3 модель (`vosk-model-small-ru`, ~45 МБ)
+была добавлена напрямую в репозиторий, так что сборка в Android Studio
+больше не требует ручного шага. `VoskModelProvisioner.ensureModel()` по
+прежнему возвращает `null` и ничего не роняет, если модель вдруг
+отсутствует (например, в среде сборки этого агента, где нет Android SDK
+и физического устройства для проверки) — Debug Screen корректно показывает
+«Модель не загружена» в этом случае.
 
-Если модель отсутствует, `VoskModelProvisioner.ensureModel()` возвращает
-`null`, `VoiceEngine` переводит `VoiceEngineState` в `Error("Модель Vosk не
-найдена")`, ничего не падает — Debug Screen корректно показывает эту
-ситуацию (ровно то поведение, которого требует бриф Sprint 3 для
-диагностики).
+---
+
+## Sprint 3.1 — Voice UX & Recognition Improvements (2026-07-01)
+
+**Цель:** довести голосовое управление до состояния, пригодного для
+ежедневного использования, оставаясь полностью локальным (без TTS, LLM,
+облачных сервисов).
+
+### Что реализовано
+
+1. **Расширенный `commands.json` + `TextNormalizer`.** Добавлены словоформы
+   и разговорные варианты для PAUSE/PLAY/NEXT/PREVIOUS/QUERY_NOW_PLAYING
+   (по образцам из брифа). `TextNormalizer` (`feature/voice`) — lowercase,
+   ё→е, удаление пунктуации, схлопывание пробелов; используется и
+   `KeywordIntentRecognizer`, и `VoiceEngine` (для показа Normalized Text
+   в диагностике) — единая точка нормализации, а не дублирование логики.
+
+2. **Confidence Threshold.** `DjSettings.voskConfidenceThreshold` (по
+   умолчанию `0.8f`, диапазон 50–95%) настраивается слайдером в
+   `SettingsScreen`. `VoiceEngine.handleRecognition()` сравнивает
+   `RecognitionResult.confidence` с порогом *до* вызова `IntentRecognizer`
+   — при `confidence < threshold` команда не выполняется вообще (ни
+   `CommandDispatcher.dispatch()`, ни смена режима не происходят),
+   а причина ("Low confidence (43% < 80%)") записывается в
+   `VoiceStateHolder` и видна на Debug Screen.
+
+3. **Debug Screen — новые поля.** Raw Text, Normalized Text, Confidence,
+   Intent, Action, Execution Result, Reject Reason — как в текущем
+   состоянии, так и в журнале последних 10 команд (`VoiceCommandLogEntry`
+   расширен теми же полями).
+
+4. **Два режима прослушивания.** `VoiceListeningMode.CONTINUOUS` (поведение
+   Sprint 3 — полная грамматика команд работает всегда) и `WAKE_WORD`
+   (лёгкое ожидание активационной фразы через `WakeWordDetector`, полное
+   распознавание команд включается только на время диалогового окна).
+   Персистится в `DjSettings.listeningMode` (DataStore), переключается как
+   из Settings (чипы Continuous/Wake Mode), так и голосом.
+
+5. **`WakeWordDetector` — абстракция активации.** Единственная реализация
+   пока — `VoskWakeWordDetector`, использующая тот же движок с крошечной
+   грамматикой (`["диджей", "джей", "dj"]`) вместо полной командной —
+   дешевле гонять постоянно, чем полное распознавание. `VoiceEngine`
+   зависит только от интерфейса, поэтому Porcupine/OpenWakeWord подключаются
+   позже заменой одной реализации, без изменения оркестрации или Media Layer.
+
+6. **Диалоговое окно.** После обнаружения wake word `VoiceEngine`
+   открывает полное распознавание команд на `DjSettings.dialogWindowSeconds`
+   (по умолчанию 6, диапазон 3–15, настраивается слайдером в Settings).
+   Каждая распознанная финальная фраза сдвигает таймер закрытия окна;
+   если новых фраз нет — сессия завершается, движок возвращается к
+   ожиданию wake word. Технически: сторожевой цикл (`delay(300)` +
+   сравнение `SystemClock.elapsedRealtime()`) отменяет child-`Job` сбора
+   распознаваний по истечении окна.
+
+7. **Голосовое переключение режимов.** "Пока слушай" → `DjIntent.SetContinuousMode`,
+   "Перестань слушать" → `DjIntent.SetWakeMode`. Перехватываются в
+   `VoiceEngine.handleRecognition()` до вызова `CommandDispatcher` — это
+   команды уровня Voice Layer, а не Media Layer, поэтому они не
+   регистрируются в `CommandRegistry` и никогда не доходят до плеера.
+
+8. **Управление громкостью.** `VolumeUp`/`VolumeDown` (уже существовали,
+   теперь есть фразы в `commands.json`), плюс новые intent'ы
+   `SetVolumeMax`/`SetVolumeMin`/`SetVolumePercent(percent)`. Последний —
+   единственная параметризованная MVP-команда: процент выделяется регэкспом
+   в `KeywordIntentRecognizer`, а сама команда (`SetVolumePercentCommand`)
+   получает его через новое поле `CommandContext.intent` (фактический
+   сматченный intent, а не просто тип) — небольшое расширение контракта,
+   необходимое именно для параметризованных команд.
+
+9. **Bluetooth-микрофон.** `AndroidAudioRecorder` при старте ищет
+   подключённое SCO Bluetooth-устройство через
+   `AudioManager.getDevices(GET_DEVICES_INPUTS)`; если найдено — активирует
+   `startBluetoothSco()`/`isBluetoothScoOn` и назначает
+   `AudioRecord.preferredDevice`. Ручного переключателя нет (см.
+   ограничения) — только автоматический выбор с best-effort fallback на
+   встроенный микрофон; активный источник виден в Debug Screen
+   ("Источник микрофона": Bluetooth / Встроенный микрофон / —).
+
+10. **Мелкая полировка анимаций.** `animateContentSize()` на карточках
+    статуса/чек-листа на `MainScreen` и на секциях `DebugScreen` — без
+    полного редизайна, как и требовал бриф.
+
+### Ограничения Sprint 3.1
+
+- **Bluetooth — только автоматический выбор.** Android не предоставляет
+  простого API для ручного выбора входного аудиоустройства внутри
+  приложения (в отличие от вывода); бриф явно разрешал оставить
+  автоматический выбор с отображением текущего источника в этом случае —
+  так и сделано.
+- **Wake word всё ещё через Vosk**, не через специализированный движок —
+  архитектура (`WakeWordDetector`) готова к замене, сама замена не входила
+  в объём Sprint 3.1.
+- **Проверка на реальном устройстве не выполнена агентом** — нет Android
+  SDK, физического микрофона, Bluetooth-гарнитуры и живых плееров в этой
+  среде. Всё проверено по коду, API-контрактам Android/Vosk/DataStore и
+  структурному анализу потоков корутин (cancellation, shared flow,
+  timing). Итоговая проверка сценариев (распознавание естественных фраз,
+  confidence threshold, оба режима, громкость, переключение режимов
+  голосом, Bluetooth-микрофон) — на стороне пользователя.
 
 ---
 
@@ -287,45 +380,63 @@ gate ПЕРЕД вызовом `IntentRecognizer.recognize()` (например,
 - `PlaybackSource` — диагностика: `MEDIA_SESSION` / `KEY_EVENT_FALLBACK` / `NO_ACTIVE_SESSION`
 
 ### Архитектурные слои (все интерфейсы финальной архитектуры)
-- **Voice**: `AudioRecorder`/`AndroidAudioRecorder` (реальный `AudioRecord`),
-  `SpeechRecognizer`/`VoskSpeechRecognizer` (реальный Vosk), `GrammarBuilder`,
-  `VoiceCommandConfigLoader`, `VoskModelProvisioner` — все реализованы (Sprint 3)
-- **Intent**: `DjIntent` (11 вариантов), `IntentRecognizer` /
-  `KeywordIntentRecognizer` — словарь из `commands.json` (Sprint 3)
-- **Command**: `DjCommand` (без `triggers` — Sprint 3), `CommandContext`,
-  `CommandResult`, `CommandRegistry`, `CommandDispatcher`
+- **Voice**: `AudioRecorder`/`AndroidAudioRecorder` (реальный `AudioRecord`,
+  Bluetooth SCO auto-routing), `SpeechRecognizer`/`VoskSpeechRecognizer`
+  (реальный Vosk, поддержка произвольного словаря), `GrammarBuilder`,
+  `VoiceCommandConfigLoader`, `VoskModelProvisioner`, `TextNormalizer`,
+  `WakeWordDetector`/`VoskWakeWordDetector`, `VoiceListeningMode` — все
+  реализованы (Sprint 3 + Sprint 3.1)
+- **Intent**: `DjIntent` (16 вариантов, включая `SetVolumeMax/Min/Percent`,
+  `SetContinuousMode`/`SetWakeMode`), `IntentRecognizer` /
+  `KeywordIntentRecognizer` — словарь из `commands.json` + regex для
+  параметризованной громкости
+- **Command**: `DjCommand`, `CommandContext` (теперь несёт `intent` —
+  Sprint 3.1, нужно для параметризованных команд), `CommandResult`,
+  `CommandRegistry`, `CommandDispatcher`
 - **Media**: `MediaRemote`, `MediaStateProvider`, `MediaPlaybackState` — реализовано полностью (Sprint 2)
 - **Feedback**: `FeedbackManager` / `BeepFeedbackManager` (ToneGenerator)
-- **Settings**: `DjSettings`, `SettingsRepository` / `DataStoreSettingsRepository`
+- **Settings**: `DjSettings` (+ `listeningMode`, `dialogWindowSeconds`,
+  порог confidence по умолчанию 0.8), `SettingsRepository` /
+  `DataStoreSettingsRepository`
 - **Permissions**: `AppPermissions` (runtime), `NotificationAccess` (доступ к медиасессиям)
-- **Voice Engine** (`:service/voice`): `VoiceEngine`, `VoiceStateHolder`,
-  `VoiceEngineState`, `VoiceCommandLogEntry` — оркестрация пайплайна (Sprint 3)
+- **Voice Engine** (`:service/voice`): `VoiceEngine` (два режима, диалоговое
+  окно, confidence-фильтрация), `VoiceStateHolder`, `VoiceEngineState`
+  (+ `WaitingForWakeWord`), `VoiceCommandLogEntry` (расширенные поля)
 
 ### Команды
 
-Голосовые MVP-команды (Sprint 3, через `commands.json`):
+Голосовые команды (через `commands.json`, словоформы расширены в Sprint 3.1):
 
 | Intent-ключ | DjIntent | Фразы (примеры) |
 |---|---|---|
-| PAUSE | Pause | пауза, стоп, останови, остановить музыку, поставь на паузу |
-| PLAY | Play | продолжай, играй, воспроизвести, включи |
-| NEXT | Next | следующий, следующий трек, дальше, вперёд |
-| PREVIOUS | Previous | предыдущий, назад, предыдущий трек |
-| QUERY_NOW_PLAYING | QueryNowPlaying | что играет, какая песня, что сейчас играет, какой трек |
+| PAUSE | Pause | пауза, паузу, на паузу, останови, остановить музыку, стоп |
+| PLAY | Play | играй, продолжай, продолжи, воспроизведи, включи музыку, возобнови |
+| NEXT | Next | следующий, следующий трек, дальше, вперёд, переключи трек |
+| PREVIOUS | Previous | назад, предыдущий, предыдущий трек, верни трек |
+| QUERY_NOW_PLAYING | QueryNowPlaying | что играет, что сейчас играет, какая песня, какой трек |
+| VOLUME_UP | VolumeUp | громче, сделай громче, прибавь громкость |
+| VOLUME_DOWN | VolumeDown | тише, сделай тише, убавь громкость |
+| VOLUME_MAX | SetVolumeMax | максимальная громкость, на полную громкость |
+| VOLUME_MIN | SetVolumeMin | минимальная громкость, выключи звук |
+| (regex) | SetVolumePercent(N) | "громкость 50 процентов" — число извлекается регэкспом |
+| MODE_CONTINUOUS | SetContinuousMode | пока слушай, слушай постоянно |
+| MODE_WAKE | SetWakeMode | перестань слушать, хватит слушать |
 
-Остальные команды (`ArtistCommand`, `IsPlayingCommand`, `VolumeUpCommand`,
-`VolumeDownCommand`, `VolumeQueryCommand`) по-прежнему зарегистрированы в
-`CommandRegistry` и доступны программно (`findByIntent`), но **не имеют
-записи в `commands.json`** — голосом их вызвать нельзя, пока кто-то не
-добавит фразы в конфиг (управление громкостью голосом также явно исключено
-из Sprint 3 требованиями брифа).
+`ArtistCommand`, `IsPlayingCommand`, `VolumeQueryCommand` по-прежнему
+зарегистрированы в `CommandRegistry` (доступны программно через
+`findByIntent`), но не имеют записи в `commands.json` — голосом их вызвать
+нельзя, пока кто-то не добавит фразы в конфиг.
 
 ### UI
-- `MainScreen` — статус сервиса, чек-лист готовности, кнопки Start/Stop, версия, результат команды
-- `SettingsScreen` — автозапуск, показ DebugScreen, доступ к медиасессиям
-- `DebugScreen` — сервис, разрешения, последняя ошибка, аудио, **Voice**
-  (статус, модель, фраза, confidence, Intent, Action, время обработки +
-  журнал последних 10 команд), воспроизведение (Media Layer), журнал логов
+- `MainScreen` — статус сервиса, чек-лист готовности, кнопки Start/Stop, версия, результат команды, `animateContentSize()` на карточках
+- `SettingsScreen` — автозапуск, показ DebugScreen, доступ к медиасессиям,
+  слайдер confidence threshold (50–95%), выбор режима Continuous/Wake Mode,
+  слайдер диалогового окна (3–15 сек)
+- `DebugScreen` — сервис, разрешения, последняя ошибка, аудио (+ источник
+  микрофона), **Voice** (статус, режим, модель, Raw/Normalized Text,
+  confidence, Intent, Action, Execution Result, Reject Reason, время
+  обработки + журнал последних 10 команд с теми же полями), воспроизведение
+  (Media Layer), журнал логов, `animateContentSize()` на секциях
 - Navigation Compose: Main ↔ Settings, Main ↔ Debug, iOS-style transitions
 - Dark theme (Material3)
 
@@ -338,35 +449,36 @@ gate ПЕРЕД вызовом `IntentRecognizer.recognize()` (например,
 
 | Компонент | Sprint |
 |---|---|
-| Активационная фраза (wake word) как обязательный gate | Sprint 4 |
-| Голосовое управление громкостью | Не запланировано (явно исключено из Sprint 3) |
-| Синтез речи / голосовые ответы | Не запланировано (явно исключено из Sprint 3) |
+| Полноценный wake-word движок (Porcupine/OpenWakeWord) | Sprint 4 |
+| Ручной выбор источника микрофона (только автоматический Bluetooth) | Не запланировано (ограничение Android API) |
+| Синтез речи / голосовые ответы | Не запланировано (явно исключено) |
 | Onboarding для доступа к медиасессиям при первом запуске | Остаток Sprint 7 |
 | Рендеринг обложки трека | Не запланировано |
-| Porcupine wake word (отдельный детектор, не keyword-gate) | Будущее |
 | Замена словарного Intent Parser на локальную LLM | Будущее (архитектура уже это допускает) |
+| Диалоговый режим (полноценный, многоходовой) | Не запланировано (явно исключено из Sprint 3.1) |
 
 ---
 
 ## Известные ограничения
 
-1. **Офлайн-модель Vosk не входит в репозиторий** — см. «Voice Architecture»
-   выше. Без неё голосовой цикл корректно сообщает об ошибке, но не
-   распознаёт речь. Это единственная причина, по которой финальный сценарий
-   демонстрации Sprint 3 не был прогнан на реальном устройстве в этой сессии.
-2. **Wake word отсутствует** — намеренно, по требованию брифа Sprint 3;
-   архитектура (см. `stripWakeWord`) готова к добавлению без переписывания.
+1. **Wake word работает через Vosk с урезанной грамматикой**, не через
+   специализированный движок — архитектура (`WakeWordDetector`) готова к
+   замене без переписывания `VoiceEngine`.
+2. **Bluetooth-микрофон — автоматический выбор**, без ручного переключателя
+   (ограничение Android API для выбора входного устройства из приложения).
 3. **Доступ к медиасессиям выдаётся только вручную** — нет автоматического запроса/онбординга, только кнопка в Настройках.
 4. **Автозапуск без разрешений** — при холодном старте не показывает системный запрос (разрешения запрашиваются по кнопке «Запустить»).
 5. **`runBlocking` в `autoStartServiceIfNeeded`** — приемлемо для чтения начальных настроек, стоит перенести в корутину в одном из следующих спринтов.
-6. **Голосовые команды громкости/исполнителя/статуса воспроизведения не подключены** — `commands.json` содержит только 5 MVP-ключей; расширение — правка конфигурации.
+6. **Sprint 3.1 не проверен на реальном устройстве агентом** — нет Android
+   SDK, микрофона, Bluetooth-гарнитуры в среде сборки. Проверено по коду и
+   API-контрактам; финальная проверка сценариев — за пользователем.
 
 ---
 
 ## Следующая задача
 
-**Sprint 4: Wake Word + журнал**
+**Sprint 4: Полноценный Wake Word движок**
 
-Активационная фраза как gate перед `IntentRecognizer.recognize()` в
-`VoiceEngine.handleRecognition()`, без изменения самого матчинга; расширение
-обзора журнала неизвестных команд в UI.
+Заменить `VoskWakeWordDetector` на специализированный движок (Porcupine или
+OpenWakeWord) через существующий интерфейс `WakeWordDetector` — без
+изменения `VoiceEngine`; расширить обзор журнала неизвестных команд в UI.

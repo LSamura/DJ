@@ -6,9 +6,12 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.djassistant.feature.settings.DjSettings
 import com.djassistant.feature.settings.SettingsRepository
+import com.djassistant.feature.voice.VoiceListeningMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,13 +29,19 @@ class DataStoreSettingsRepository @Inject constructor(
         val AUTO_START_SERVICE = booleanPreferencesKey("auto_start_service")
         val SHOW_DEBUG_SCREEN = booleanPreferencesKey("show_debug_screen")
         val VOSK_CONFIDENCE_THRESHOLD = floatPreferencesKey("vosk_confidence_threshold")
+        val LISTENING_MODE = stringPreferencesKey("listening_mode")
+        val DIALOG_WINDOW_SECONDS = intPreferencesKey("dialog_window_seconds")
     }
 
     override val settings: Flow<DjSettings> = context.dataStore.data.map { prefs ->
         DjSettings(
             autoStartService = prefs[Keys.AUTO_START_SERVICE] ?: false,
             showDebugScreen = prefs[Keys.SHOW_DEBUG_SCREEN] ?: false,
-            voskConfidenceThreshold = prefs[Keys.VOSK_CONFIDENCE_THRESHOLD] ?: 0.5f
+            voskConfidenceThreshold = prefs[Keys.VOSK_CONFIDENCE_THRESHOLD] ?: 0.8f,
+            listeningMode = prefs[Keys.LISTENING_MODE]?.let { raw ->
+                runCatching { VoiceListeningMode.valueOf(raw) }.getOrNull()
+            } ?: VoiceListeningMode.CONTINUOUS,
+            dialogWindowSeconds = prefs[Keys.DIALOG_WINDOW_SECONDS] ?: 6
         )
     }
 
@@ -46,5 +55,13 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setVoskConfidenceThreshold(value: Float) {
         context.dataStore.edit { it[Keys.VOSK_CONFIDENCE_THRESHOLD] = value }
+    }
+
+    override suspend fun setListeningMode(mode: VoiceListeningMode) {
+        context.dataStore.edit { it[Keys.LISTENING_MODE] = mode.name }
+    }
+
+    override suspend fun setDialogWindowSeconds(seconds: Int) {
+        context.dataStore.edit { it[Keys.DIALOG_WINDOW_SECONDS] = seconds.coerceIn(3, 15) }
     }
 }

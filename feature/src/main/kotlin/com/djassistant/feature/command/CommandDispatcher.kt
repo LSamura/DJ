@@ -44,7 +44,8 @@ class CommandDispatcher @Inject constructor(
             mediaRemote = mediaRemote,
             stateProvider = stateProvider,
             audioManager = audioManager,
-            rawText = rawText
+            rawText = rawText,
+            intent = intent
         )
 
         return command.execute(ctx).also { result ->

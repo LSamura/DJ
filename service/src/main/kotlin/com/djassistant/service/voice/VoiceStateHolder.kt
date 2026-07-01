@@ -10,9 +10,10 @@ private const val MAX_LOG_ENTRIES = 10
 
 /**
  * Voice-pipeline diagnostics for the Debug Screen — engine/model status,
- * last recognition + intent + action + timing, and a bounded journal of
- * recent commands. Analogous to [com.djassistant.service.ServiceStateHolder],
- * but scoped to the voice pipeline specifically rather than the foreground
+ * last recognition (raw + normalized text, confidence, intent, execution
+ * result, reject reason) + timing, and a bounded journal of recent
+ * commands. Analogous to [com.djassistant.service.ServiceStateHolder], but
+ * scoped to the voice pipeline specifically rather than the foreground
  * service as a whole.
  */
 @Singleton
@@ -24,8 +25,11 @@ class VoiceStateHolder @Inject constructor() {
     private val _modelLoaded = MutableStateFlow(false)
     val modelLoaded: StateFlow<Boolean> = _modelLoaded.asStateFlow()
 
-    private val _lastRecognizedText = MutableStateFlow("")
-    val lastRecognizedText: StateFlow<String> = _lastRecognizedText.asStateFlow()
+    private val _lastRawText = MutableStateFlow("")
+    val lastRawText: StateFlow<String> = _lastRawText.asStateFlow()
+
+    private val _lastNormalizedText = MutableStateFlow("")
+    val lastNormalizedText: StateFlow<String> = _lastNormalizedText.asStateFlow()
 
     private val _lastConfidence = MutableStateFlow<Float?>(null)
     val lastConfidence: StateFlow<Float?> = _lastConfidence.asStateFlow()
@@ -35,6 +39,12 @@ class VoiceStateHolder @Inject constructor() {
 
     private val _lastAction = MutableStateFlow("—")
     val lastAction: StateFlow<String> = _lastAction.asStateFlow()
+
+    private val _lastExecutionResult = MutableStateFlow("—")
+    val lastExecutionResult: StateFlow<String> = _lastExecutionResult.asStateFlow()
+
+    private val _lastRejectReason = MutableStateFlow<String?>(null)
+    val lastRejectReason: StateFlow<String?> = _lastRejectReason.asStateFlow()
 
     private val _lastProcessingTimeMs = MutableStateFlow<Long?>(null)
     val lastProcessingTimeMs: StateFlow<Long?> = _lastProcessingTimeMs.asStateFlow()
@@ -51,23 +61,33 @@ class VoiceStateHolder @Inject constructor() {
     }
 
     fun recordRecognition(
-        recognizedText: String,
+        rawText: String,
+        normalizedText: String,
         confidence: Float?,
         intentLabel: String,
         actionLabel: String,
+        executionResult: String,
+        rejectReason: String?,
         processingTimeMs: Long
     ) {
-        _lastRecognizedText.value = recognizedText
+        _lastRawText.value = rawText
+        _lastNormalizedText.value = normalizedText
         _lastConfidence.value = confidence
         _lastIntent.value = intentLabel
         _lastAction.value = actionLabel
+        _lastExecutionResult.value = executionResult
+        _lastRejectReason.value = rejectReason
         _lastProcessingTimeMs.value = processingTimeMs
 
         val entry = VoiceCommandLogEntry(
             timestampMs = System.currentTimeMillis(),
-            recognizedText = recognizedText,
+            rawText = rawText,
+            normalizedText = normalizedText,
+            confidence = confidence,
             intentLabel = intentLabel,
             actionLabel = actionLabel,
+            executionResult = executionResult,
+            rejectReason = rejectReason,
             processingTimeMs = processingTimeMs
         )
         _recentCommands.value = (_recentCommands.value + entry).takeLast(MAX_LOG_ENTRIES)

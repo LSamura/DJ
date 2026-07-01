@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.djassistant.feature.settings.DjSettings
 import com.djassistant.feature.settings.SettingsRepository
+import com.djassistant.feature.voice.VoiceListeningMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
@@ -25,5 +26,17 @@ class SettingsViewModel @Inject constructor(
 
     fun setShowDebugScreen(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setShowDebugScreen(enabled) }
+    }
+
+    fun setVoskConfidenceThreshold(value: Float) {
+        viewModelScope.launch { settingsRepository.setVoskConfidenceThreshold(value) }
+    }
+
+    fun setListeningMode(mode: VoiceListeningMode) {
+        viewModelScope.launch { settingsRepository.setListeningMode(mode) }
+    }
+
+    fun setDialogWindowSeconds(seconds: Int) {
+        viewModelScope.launch { settingsRepository.setDialogWindowSeconds(seconds) }
     }
 }

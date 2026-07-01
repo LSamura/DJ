@@ -10,6 +10,9 @@ import com.djassistant.feature.command.impl.NowPlayingCommand
 import com.djassistant.feature.command.impl.PauseCommand
 import com.djassistant.feature.command.impl.PlayCommand
 import com.djassistant.feature.command.impl.PreviousTrackCommand
+import com.djassistant.feature.command.impl.SetVolumeMaxCommand
+import com.djassistant.feature.command.impl.SetVolumeMinCommand
+import com.djassistant.feature.command.impl.SetVolumePercentCommand
 import com.djassistant.feature.command.impl.VolumeDownCommand
 import com.djassistant.feature.command.impl.VolumeQueryCommand
 import com.djassistant.feature.command.impl.VolumeUpCommand
@@ -24,8 +27,10 @@ import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.settings.impl.DataStoreSettingsRepository
 import com.djassistant.feature.voice.AudioRecorder
 import com.djassistant.feature.voice.SpeechRecognizer
+import com.djassistant.feature.voice.WakeWordDetector
 import com.djassistant.feature.voice.impl.AndroidAudioRecorder
 import com.djassistant.feature.voice.impl.VoskSpeechRecognizer
+import com.djassistant.feature.voice.impl.VoskWakeWordDetector
 import com.djassistant.service.DjServiceController
 import com.djassistant.service.ServiceController
 import dagger.Binds
@@ -61,6 +66,9 @@ abstract class AppModule {
     abstract fun bindSpeechRecognizer(impl: VoskSpeechRecognizer): SpeechRecognizer
 
     @Binds @Singleton
+    abstract fun bindWakeWordDetector(impl: VoskWakeWordDetector): WakeWordDetector
+
+    @Binds @Singleton
     abstract fun bindUnknownCommandLogger(impl: CsvUnknownCommandLogger): UnknownCommandLogger
 
     @Binds @Singleton
@@ -78,6 +86,9 @@ abstract class AppModule {
                 register(PreviousTrackCommand())
                 register(VolumeUpCommand())
                 register(VolumeDownCommand())
+                register(SetVolumeMaxCommand())
+                register(SetVolumeMinCommand())
+                register(SetVolumePercentCommand())
                 register(NowPlayingCommand())
                 register(ArtistCommand())
                 register(IsPlayingCommand())

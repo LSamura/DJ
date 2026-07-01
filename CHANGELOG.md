@@ -6,6 +6,65 @@
 
 ---
 
+## [0.3.1] — 2026-07-01 — Sprint 3.1: Voice UX & Recognition Improvements
+
+Доведение голосового управления до состояния, пригодного для ежедневного
+использования. Без TTS, LLM и облачных сервисов — всё по-прежнему локально.
+
+**Добавлено:**
+- Расширенный `commands.json`: словоформы и разговорные варианты для
+  PAUSE/PLAY/NEXT/PREVIOUS/QUERY_NOW_PLAYING, плюс новые ключи
+  VOLUME_UP/VOLUME_DOWN/VOLUME_MAX/VOLUME_MIN/MODE_CONTINUOUS/MODE_WAKE.
+- `TextNormalizer` (`feature/voice`) — lowercase, ё→е, без пунктуации,
+  схлопывание пробелов; общий для Intent Parser и Debug Screen.
+- Confidence threshold: `DjSettings.voskConfidenceThreshold` (по умолчанию
+  0.8, диапазон 50–95%), слайдер в Settings; распознавания ниже порога не
+  выполняются, причина отказа видна в Debug Screen ("Reject Reason").
+- Debug Screen: Raw Text, Normalized Text, Execution Result, Reject Reason,
+  Источник микрофона, Режим прослушивания — в текущем состоянии и в журнале.
+- Два режима прослушивания: `VoiceListeningMode.CONTINUOUS` (как в Sprint 3)
+  и `WAKE_WORD` (лёгкое ожидание активационной фразы, полное распознавание
+  команд — только в диалоговом окне после активации).
+- `WakeWordDetector` (интерфейс) + `VoskWakeWordDetector` (реализация на
+  урезанной Vosk-грамматике `["диджей","джей","dj"]`) — не привязывает
+  Voice Layer к конкретному будущему движку активации.
+- Диалоговое окно после активации: 3–15 сек (по умолчанию 6), настраивается
+  слайдером в Settings, сбрасывается при каждой распознанной фразе.
+- Голосовое переключение режимов: "Пока слушай" → Continuous, "Перестань
+  слушать" → Wake Mode — перехватывается в `VoiceEngine`, не доходит до
+  `CommandDispatcher`/Media Layer.
+- Управление громкостью: `SetVolumeMax`/`SetVolumeMin`/`SetVolumePercent(N)`
+  — новые intent'ы и команды; процент извлекается регэкспом
+  ("громкость 50 процентов").
+- Bluetooth-микрофон: автоматический выбор SCO-входа при подключённой
+  гарнитуре в `AndroidAudioRecorder`, активный источник виден в Debug Screen.
+- `animateContentSize()` на карточках MainScreen и секциях Debug Screen.
+
+**Изменено:**
+- `SpeechRecognizer.startListening()` получил необязательный параметр
+  `vocabulary: List<String>?` — null сохраняет прежнее поведение (полная
+  командная грамматика).
+- `CommandContext` теперь несёт фактический `intent: DjIntent` (не только
+  тип) — нужно для параметризованных команд вроде `SetVolumePercent`.
+- `KeywordIntentRecognizer` использует `TextNormalizer` вместо ad-hoc
+  lowercase/trim; добавлена regex-ветка для процента громкости до
+  словарного сопоставления.
+- `RecognitionResult`/`VoiceCommandLogEntry`/`VoiceStateHolder` расширены
+  полями rawText/normalizedText/executionResult/rejectReason.
+
+**Ограничения:**
+- Bluetooth — только автоматический выбор, без ручного переключателя
+  (ограничение Android API для выбора входного устройства из приложения;
+  явно разрешённый в брифе запасной вариант).
+- Wake word работает через Vosk с урезанной грамматикой, не через
+  специализированный движок — архитектура готова к замене без переписывания.
+- Проверка на реальном устройстве (естественные фразы, confidence threshold,
+  оба режима, громкость, Bluetooth) не выполнена агентом — нет Android SDK,
+  микрофона и Bluetooth-гарнитуры в среде сборки; проверено по коду и
+  API-контрактам, финальная проверка — за пользователем.
+
+---
+
 ## [0.3.0] — 2026-07-01 — Sprint 3: Offline Voice Control MVP
 
 Полностью локальный голосовой цикл: микрофон → Vosk → Intent Parser →
