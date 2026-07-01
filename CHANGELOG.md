@@ -6,6 +6,67 @@
 
 ---
 
+## [0.3.0] — 2026-07-01 — Sprint 3: Offline Voice Control MVP
+
+Полностью локальный голосовой цикл: микрофон → Vosk → Intent Parser →
+Media Layer. Без интернета, без wake word, без синтеза речи.
+
+**Добавлено:**
+- `commands.json` (`feature/src/main/assets/`) — фразы для каждого intent
+  вынесены в конфигурацию вместо хардкода в командах.
+- `VoiceCommandConfigLoader` — загрузка и кэширование `commands.json`.
+- Реальный `AndroidAudioRecorder`: `AudioRecord` 16kHz mono PCM16 →
+  `Flow<ByteArray>`, RMS-уровень сигнала, гарантированное освобождение
+  микрофона в `finally`.
+- Интеграция Vosk (`com.alphacephei:vosk-android` + `jna`, официальный
+  Maven-репозиторий alphacephei) — `VoskSpeechRecognizer` работает в
+  Grammar Mode, вычисляет confidence из `result[].conf`.
+- `VoskModelProvisioner` — разворачивает офлайн-модель из assets в
+  локальное хранилище приложения при первом запуске (чистый файловый I/O).
+- `VoiceEngine` (`:service/voice`) — оркестрация всего пайплайна на
+  `Dispatchers.IO`, не блокирует главный поток.
+- `VoiceStateHolder` + `VoiceEngineState` + `VoiceCommandLogEntry` —
+  диагностика голосового пайплайна для Debug Screen.
+- `DjVoiceService` — отдельный Android Service, запускается/останавливается
+  вместе с `DjForegroundService`.
+- Debug Screen: раздел «Voice» (статус сервиса, статус Vosk/модели,
+  последняя фраза, confidence, Intent, Action, время обработки) + журнал
+  последних 10 распознанных команд.
+
+**Изменено:**
+- `KeywordIntentRecognizer` переписан на словарь из `commands.json` вместо
+  чтения `triggers` у команд из `CommandRegistry`.
+- `GrammarBuilder` строит грамматику Vosk из `commands.json`, без wake-word
+  префикса (см. ниже).
+- `DjCommand.triggers` и `CommandRegistry.findByTrigger()` удалены — стали
+  мёртвым кодом после переноса источника фраз в JSON; все 10 реализаций
+  команд лишились соответствующего поля.
+- `RecognitionResult.confidence` стал `Float?` (раньше `Float = 1.0f`) —
+  честно отражает, что Vosk не всегда предоставляет confidence.
+
+**Исправлено:**
+- Баг в `DjForegroundService.onStartCommand()`: null-интент (redelivery
+  после `START_STICKY`) обрабатывался как сигнал остановки вместо сигнала
+  возобновления — сервис не переживал перезапуск процесса. Обнаружено при
+  реализации требования «Voice Service автоматически восстанавливается
+  после перезапуска».
+
+**Ограничения:**
+- Wake word намеренно не реализован (по требованию брифа); архитектура уже
+  готова к добавлению (`stripWakeWord()` вызывается уже сейчас как no-op).
+- **Офлайн-модель Vosk (~45 МБ) не бандлится в этот репозиторий** — среда
+  сборки агента не имеет доступа ни к интернету для скачивания модели, ни
+  к Android SDK для сборки/прогона на устройстве. `VoskModelProvisioner`
+  корректно возвращает `null`, если модель отсутствует; приложение не
+  падает, Debug Screen показывает «Модель не загружена». Разработчику нужно
+  вручную добавить модель в `feature/src/main/assets/model/` перед сборкой
+  (см. PROJECT_STATE.md). Финальный сценарий демонстрации Sprint 3 не был
+  прогнан целиком на реальном устройстве в этой сессии по этой причине.
+- Голосовое управление громкостью, синтез речи, поиск музыки — не
+  реализованы (явно исключены из объёма Sprint 3).
+
+---
+
 ## [0.2.1] — 2026-07-01 — Sprint 2 Final Polish
 
 Media Layer подтверждён как стабильно работающий (управление воспроизведением

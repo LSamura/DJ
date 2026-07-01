@@ -7,7 +7,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class ArtistCommand : DjCommand {
     override val intent: DjIntent = DjIntent.QueryArtist
-    override val triggers = listOf("кто исполнитель", "чья песня", "кто поёт", "исполнитель")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         val state = context.stateProvider.getSnapshot()

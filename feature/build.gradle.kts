@@ -26,4 +26,9 @@ dependencies {
     implementation(libs.bundles.coroutines)
     implementation(libs.datastore.preferences)
     implementation(libs.timber)
+
+    // Offline ASR (Vosk) — jna needs the @aar classifier, so it's declared
+    // directly rather than through the version catalog.
+    implementation(libs.vosk.android)
+    implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
 }

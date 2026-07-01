@@ -7,7 +7,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class PlayCommand : DjCommand {
     override val intent: DjIntent = DjIntent.Play
-    override val triggers = listOf("играй", "продолжи", "воспроизведи", "play", "resume")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         context.mediaRemote.play()

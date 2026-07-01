@@ -39,6 +39,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.djassistant.core.logging.DjLogBuffer
 import com.djassistant.feature.media.PlaybackSource
+import com.djassistant.service.voice.VoiceEngineState
 import com.djassistant.ui.components.AudioLevelBar
 import com.djassistant.ui.components.StatusIndicator
 import com.djassistant.ui.permissions.AppPermissions
@@ -58,12 +59,18 @@ fun DebugScreen(
 ) {
     val serviceMode by viewModel.serviceMode.collectAsStateWithLifecycle()
     val audioLevel by viewModel.audioLevel.collectAsStateWithLifecycle()
-    val lastText by viewModel.lastRecognizedText.collectAsStateWithLifecycle()
-    val lastInfo by viewModel.lastCommandInfo.collectAsStateWithLifecycle()
     val mediaState by viewModel.mediaState.collectAsStateWithLifecycle()
     val unknownCommands by viewModel.recentUnknownCommands.collectAsStateWithLifecycle()
     val lastError by viewModel.lastError.collectAsStateWithLifecycle()
     val recentLogs by viewModel.recentLogs.collectAsStateWithLifecycle()
+    val voiceEngineState by viewModel.voiceEngineState.collectAsStateWithLifecycle()
+    val voiceModelLoaded by viewModel.voiceModelLoaded.collectAsStateWithLifecycle()
+    val voiceLastText by viewModel.voiceLastText.collectAsStateWithLifecycle()
+    val voiceLastConfidence by viewModel.voiceLastConfidence.collectAsStateWithLifecycle()
+    val voiceLastIntent by viewModel.voiceLastIntent.collectAsStateWithLifecycle()
+    val voiceLastAction by viewModel.voiceLastAction.collectAsStateWithLifecycle()
+    val voiceLastProcessingTimeMs by viewModel.voiceLastProcessingTimeMs.collectAsStateWithLifecycle()
+    val voiceRecentCommands by viewModel.voiceRecentCommands.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -152,9 +159,37 @@ fun DebugScreen(
                 AudioLevelBar(level = audioLevel, modifier = Modifier.fillMaxWidth())
             }
 
-            DebugSection("Распознавание") {
-                DebugRow("Последний текст") { DebugValue(lastText.ifBlank { "—" }) }
-                DebugRow("Последний результат") { DebugValue(lastInfo ?: "—") }
+            DebugSection("Voice") {
+                DebugRow("Voice Service") { DebugValue(voiceEngineState.displayName()) }
+                DebugRow("Vosk") { DebugValue(if (voiceModelLoaded) "Модель загружена" else "Модель не загружена") }
+                DebugRow("Последняя фраза") { DebugValue(voiceLastText.ifBlank { "—" }) }
+                DebugRow("Confidence") {
+                    DebugValue(voiceLastConfidence?.let { "%.0f%%".format(it * 100) } ?: "—")
+                }
+                DebugRow("Intent") { DebugValue(voiceLastIntent) }
+                DebugRow("Action") { DebugValue(voiceLastAction) }
+                DebugRow("Время обработки") {
+                    DebugValue(voiceLastProcessingTimeMs?.let { "$it мс" } ?: "—")
+                }
+            }
+
+            DebugSection("Журнал команд (${voiceRecentCommands.size})") {
+                if (voiceRecentCommands.isEmpty()) {
+                    Text(
+                        "Нет записей",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                } else {
+                    voiceRecentCommands.asReversed().forEach { entry ->
+                        Text(
+                            text = "[${formatTime(entry.timestampMs)}] \"${entry.recognizedText}\" → " +
+                                "${entry.intentLabel} → ${entry.actionLabel} (${entry.processingTimeMs} мс)",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(vertical = 1.dp)
+                        )
+                    }
+                }
             }
 
             DebugSection("Воспроизведение") {

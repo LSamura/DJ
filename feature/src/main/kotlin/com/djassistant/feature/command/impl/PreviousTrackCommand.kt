@@ -7,7 +7,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class PreviousTrackCommand : DjCommand {
     override val intent: DjIntent = DjIntent.Previous
-    override val triggers = listOf("предыдущий", "предыдущая", "назад", "previous", "back", "предыдущий трек")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         context.mediaRemote.previous()

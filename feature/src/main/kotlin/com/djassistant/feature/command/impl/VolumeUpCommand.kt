@@ -8,7 +8,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class VolumeUpCommand : DjCommand {
     override val intent: DjIntent = DjIntent.VolumeUp
-    override val triggers = listOf("громче", "прибавь", "увеличь звук", "volume up")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         context.audioManager.adjustStreamVolume(

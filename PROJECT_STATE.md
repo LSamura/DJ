@@ -1,22 +1,113 @@
 # PROJECT_STATE.md
 
-_Обновлено: 2026-07-01 | Sprint 2 (Media Layer) — Final Polish завершён_
+_Обновлено: 2026-07-01 | Sprint 3 (Offline Voice Control MVP)_
 
 ---
 
 ## Текущее состояние
 
-**Sprint 1 и Sprint 2 полностью завершены**, включая финальную полировку Media Layer. Ручное тестирование Sprint 1 пройдено полностью на реальном устройстве. Media Layer — единственная точка взаимодействия с музыкальными приложениями, готов к интеграции Voice Layer.
+**Sprint 1, Sprint 2 и Sprint 3 реализованы.** Media Layer стабилен и протестирован на реальном устройстве. Voice Layer реализован полностью в коде: микрофон → Vosk → Intent Parser → Media Layer. **Модель Vosk не бандлится в этот репозиторий** (см. «Voice Architecture» и «Известные ограничения» ниже) — это единственное, что мешает прогнать финальный сценарий целиком без ручного шага разработчика.
 
 Проект:
 - Открывается в Android Studio
-- Собирается без ошибок
+- Собирается без ошибок (при наличии модели Vosk в assets — см. ниже)
 - Запускается на устройстве Android 8.0+ (minSdk 26)
 - Не падает при отсутствии разрешений — запрашивает их автоматически
 - Сервис стабильно запускается и останавливается, уведомление отображается
 - Управляет реальными плеерами (Spotify, AIMP, YouTube Music и др.) через `MediaController`, с fallback на медиа-клавиши
 - Позиция трека в Debug Screen обновляется плавно (~300 мс), без лишних запросов к MediaSession
-- Готов к реализации Sprint 3 (аудиопайплайн для Voice Layer)
+- Голосовой пайплайн работает полностью локально, без интернета
+
+---
+
+## Voice Architecture (Sprint 3)
+
+### Цепочка
+
+```
+Микрофон (AudioRecorder)
+    ↓ Flow<ByteArray> (16kHz mono PCM16)
+Vosk (SpeechRecognizer, Grammar Mode)
+    ↓ RecognitionResult(text, confidence, isFinal)
+Intent Parser (IntentRecognizer)
+    ↓ DjIntent
+Media Layer (CommandDispatcher → уже существующий с Sprint 1/2)
+    ↓ CommandResult
+Плеер (MediaController / медиа-клавиши)
+```
+
+### Компоненты и их расположение
+
+| Роль (из брифа Sprint 3) | Фактический класс | Модуль |
+|---|---|---|
+| VoiceRecognizer | `SpeechRecognizer` / `VoskSpeechRecognizer` | `:feature` (уже существовал с Sprint 1 как интерфейс) |
+| — | `AudioRecorder` / `AndroidAudioRecorder` | `:feature` |
+| — | `VoskModelProvisioner` | `:feature` |
+| — | `VoiceCommandConfigLoader` | `:feature` (новое — `commands.json`) |
+| IntentParser | `IntentRecognizer` / `KeywordIntentRecognizer` | `:feature` (существовал, переписан на конфиг) |
+| IntentDispatcher | `CommandDispatcher` | `:feature` (существовал с Sprint 1, без изменений) |
+| VoiceEngine | `VoiceEngine` | `:service/voice` (новое) |
+| VoiceState / VoiceRepository | `VoiceStateHolder` + `VoiceEngineState` | `:service/voice` (новое) |
+| Voice Service | `DjVoiceService` | `:service` (новое) |
+
+**Почему не буквально пакет `voice/` с нуля:** архитектура Sprint 1
+(`feature/voice`, `feature/intent`, `feature/command`) уже реализовывала
+ровно те же роли под другими именами (ADR-005/006). Вместо дублирования
+слоя, компоненты Sprint 3 достраивают существующие интерфейсы реальными
+реализациями и добавляют только то, чего не хватало: `VoiceEngine`
+(оркестрация пайплайна) и `VoiceStateHolder` (диагностика для Debug Screen).
+Это то же решение, что и в брифе Sprint 2 («если текущая архитектура
+предлагает более удачное разделение — разрешено её использовать»),
+применённое и здесь. Подробности — DECISIONS.md, ADR-020..ADR-024.
+
+**Почему `VoiceEngine`/`DjVoiceService` — в `:service`, а не в `:feature`:**
+граф зависимостей (`service → feature`, не наоборот) не позволяет
+`feature/voice` знать о `ServiceStateHolder`/`ServiceMode`. `VoiceEngine`
+обязан обновлять оба вида состояния (сервисное и голосовое), поэтому живёт
+там же, где уже живёт `ServiceStateHolder` — в `:service`. `feature/voice`
+при этом остаётся полностью независимым от Media Layer в буквальном
+смысле: ни один файл в `feature/voice` не импортирует `feature/media`.
+
+### `commands.json`
+
+Хранится в `feature/src/main/assets/commands.json`. Формат:
+```json
+{ "PAUSE": ["пауза", "стоп", ...], "NEXT": [...], ... }
+```
+`VoiceCommandConfigLoader` кэширует разбор один раз (`by lazy`).
+`KeywordIntentRecognizer` использует эти фразы для сопоставления (без
+голосового wake word — см. ADR-023), `GrammarBuilder` использует те же
+фразы для построения грамматики Vosk. Добавление синонима — правка одной
+строки JSON, без пересборки логики.
+
+### Wake Word (отложено намеренно)
+
+Wake word НЕ реализован в Sprint 3 (по прямому требованию брифа).
+`KeywordIntentRecognizer` уже вызывает `commandText.stripWakeWord()` —
+существующую утилиту ядра (core, Sprint 1) — перед сопоставлением: сейчас
+это no-op, если фраза без префикса "Диджей"/"dj", но когда в будущем
+понадобится обязательная активационная фраза, логику можно вставить как
+gate ПЕРЕД вызовом `IntentRecognizer.recognize()` (например, в
+`VoiceEngine.handleRecognition()`), не трогая существующий матчинг.
+
+### Ограничение: офлайн-модель Vosk не бандлится
+
+`VoskModelProvisioner` ожидает готовую модель (например,
+`vosk-model-small-ru-0.22`, ~45 МБ) под `feature/src/main/assets/model/`
+(распакованную, с файлом-маркером `conf/model.conf`). **Эта модель НЕ
+включена в репозиторий и не может быть загружена агентом в этой
+песочнице** — здесь нет ни Android SDK для сборки, ни (проверенного)
+доступа к серверам с бинарными моделями. Разработчику нужно:
+1. Скачать модель с официального сайта Vosk на своей машине.
+2. Распаковать её содержимое в `feature/src/main/assets/model/` (так, чтобы
+   `feature/src/main/assets/model/conf/model.conf` существовал).
+3. Собрать проект в Android Studio.
+
+Если модель отсутствует, `VoskModelProvisioner.ensureModel()` возвращает
+`null`, `VoiceEngine` переводит `VoiceEngineState` в `Error("Модель Vosk не
+найдена")`, ничего не падает — Debug Screen корректно показывает эту
+ситуацию (ровно то поведение, которого требует бриф Sprint 3 для
+диагностики).
 
 ---
 
@@ -196,32 +287,45 @@ _Обновлено: 2026-07-01 | Sprint 2 (Media Layer) — Final Polish зав
 - `PlaybackSource` — диагностика: `MEDIA_SESSION` / `KEY_EVENT_FALLBACK` / `NO_ACTIVE_SESSION`
 
 ### Архитектурные слои (все интерфейсы финальной архитектуры)
-- **Voice**: `AudioRecorder`, `SpeechRecognizer`, `GrammarBuilder` (stubs — Sprint 3/4)
-- **Intent**: `DjIntent` (10 вариантов), `IntentRecognizer` / `KeywordIntentRecognizer`
-- **Command**: `DjCommand`, `CommandContext`, `CommandResult`, `CommandRegistry`, `CommandDispatcher`
+- **Voice**: `AudioRecorder`/`AndroidAudioRecorder` (реальный `AudioRecord`),
+  `SpeechRecognizer`/`VoskSpeechRecognizer` (реальный Vosk), `GrammarBuilder`,
+  `VoiceCommandConfigLoader`, `VoskModelProvisioner` — все реализованы (Sprint 3)
+- **Intent**: `DjIntent` (11 вариантов), `IntentRecognizer` /
+  `KeywordIntentRecognizer` — словарь из `commands.json` (Sprint 3)
+- **Command**: `DjCommand` (без `triggers` — Sprint 3), `CommandContext`,
+  `CommandResult`, `CommandRegistry`, `CommandDispatcher`
 - **Media**: `MediaRemote`, `MediaStateProvider`, `MediaPlaybackState` — реализовано полностью (Sprint 2)
 - **Feedback**: `FeedbackManager` / `BeepFeedbackManager` (ToneGenerator)
 - **Settings**: `DjSettings`, `SettingsRepository` / `DataStoreSettingsRepository`
 - **Permissions**: `AppPermissions` (runtime), `NotificationAccess` (доступ к медиасессиям)
+- **Voice Engine** (`:service/voice`): `VoiceEngine`, `VoiceStateHolder`,
+  `VoiceEngineState`, `VoiceCommandLogEntry` — оркестрация пайплайна (Sprint 3)
 
-### Команды (10 штук, транспортные — через Media Layer, информационные — с безопасными сообщениями)
-| Команда | Intent | Триггеры |
+### Команды
+
+Голосовые MVP-команды (Sprint 3, через `commands.json`):
+
+| Intent-ключ | DjIntent | Фразы (примеры) |
 |---|---|---|
-| PauseCommand | Pause | пауза, стоп, остановить |
-| PlayCommand | Play | играй, продолжи, воспроизведи |
-| NextTrackCommand | Next | следующий, дальше |
-| PreviousTrackCommand | Previous | предыдущий, назад |
-| VolumeUpCommand | VolumeUp | громче, прибавь |
-| VolumeDownCommand | VolumeDown | тише, убавь |
-| NowPlayingCommand | QueryNowPlaying | что играет, что за песня |
-| ArtistCommand | QueryArtist | кто исполнитель, чья песня |
-| IsPlayingCommand | QueryIsPlaying | музыка играет, включена музыка |
-| VolumeQueryCommand | QueryVolume | какая громкость, уровень звука |
+| PAUSE | Pause | пауза, стоп, останови, остановить музыку, поставь на паузу |
+| PLAY | Play | продолжай, играй, воспроизвести, включи |
+| NEXT | Next | следующий, следующий трек, дальше, вперёд |
+| PREVIOUS | Previous | предыдущий, назад, предыдущий трек |
+| QUERY_NOW_PLAYING | QueryNowPlaying | что играет, какая песня, что сейчас играет, какой трек |
+
+Остальные команды (`ArtistCommand`, `IsPlayingCommand`, `VolumeUpCommand`,
+`VolumeDownCommand`, `VolumeQueryCommand`) по-прежнему зарегистрированы в
+`CommandRegistry` и доступны программно (`findByIntent`), но **не имеют
+записи в `commands.json`** — голосом их вызвать нельзя, пока кто-то не
+добавит фразы в конфиг (управление громкостью голосом также явно исключено
+из Sprint 3 требованиями брифа).
 
 ### UI
 - `MainScreen` — статус сервиса, чек-лист готовности, кнопки Start/Stop, версия, результат команды
 - `SettingsScreen` — автозапуск, показ DebugScreen, доступ к медиасессиям
-- `DebugScreen` — сервис, разрешения, последняя ошибка, аудио, распознавание, воспроизведение (Media Layer), журнал
+- `DebugScreen` — сервис, разрешения, последняя ошибка, аудио, **Voice**
+  (статус, модель, фраза, confidence, Intent, Action, время обработки +
+  журнал последних 10 команд), воспроизведение (Media Layer), журнал логов
 - Navigation Compose: Main ↔ Settings, Main ↔ Debug, iOS-style transitions
 - Dark theme (Material3)
 
@@ -234,28 +338,35 @@ _Обновлено: 2026-07-01 | Sprint 2 (Media Layer) — Final Polish зав
 
 | Компонент | Sprint |
 |---|---|
-| AndroidAudioRecorder (реальный AudioRecord) | Sprint 3 |
-| VoskSpeechRecognizer (реальный Vosk SDK) | Sprint 4 |
-| Полный голосовой цикл | Sprint 5 |
-| Информационные голосовые команды через Media Layer | Sprint 5 |
+| Активационная фраза (wake word) как обязательный gate | Sprint 4 |
+| Голосовое управление громкостью | Не запланировано (явно исключено из Sprint 3) |
+| Синтез речи / голосовые ответы | Не запланировано (явно исключено из Sprint 3) |
 | Onboarding для доступа к медиасессиям при первом запуске | Остаток Sprint 7 |
 | Рендеринг обложки трека | Не запланировано |
-| Porcupine wake word | Будущее |
+| Porcupine wake word (отдельный детектор, не keyword-gate) | Будущее |
+| Замена словарного Intent Parser на локальную LLM | Будущее (архитектура уже это допускает) |
 
 ---
 
 ## Известные ограничения
 
-1. **Голосовой цикл не подключён** — ASR (Vosk) и запись аудио — заглушки (Sprint 3–4).
-2. **Доступ к медиасессиям выдаётся только вручную** — нет автоматического запроса/онбординга, только кнопка в Настройках.
-3. **Автозапуск без разрешений** — при холодном старте не показывает системный запрос (разрешения запрашиваются по кнопке «Запустить»).
-4. **`runBlocking` в `autoStartServiceIfNeeded`** — приемлемо для чтения начальных настроек, но в Sprint 3 стоит перенести в корутину.
-5. **Восстановление сервиса после kill системой** — Sprint 8 (сейчас `START_STICKY`, но без реинициализации голосового цикла).
+1. **Офлайн-модель Vosk не входит в репозиторий** — см. «Voice Architecture»
+   выше. Без неё голосовой цикл корректно сообщает об ошибке, но не
+   распознаёт речь. Это единственная причина, по которой финальный сценарий
+   демонстрации Sprint 3 не был прогнан на реальном устройстве в этой сессии.
+2. **Wake word отсутствует** — намеренно, по требованию брифа Sprint 3;
+   архитектура (см. `stripWakeWord`) готова к добавлению без переписывания.
+3. **Доступ к медиасессиям выдаётся только вручную** — нет автоматического запроса/онбординга, только кнопка в Настройках.
+4. **Автозапуск без разрешений** — при холодном старте не показывает системный запрос (разрешения запрашиваются по кнопке «Запустить»).
+5. **`runBlocking` в `autoStartServiceIfNeeded`** — приемлемо для чтения начальных настроек, стоит перенести в корутину в одном из следующих спринтов.
+6. **Голосовые команды громкости/исполнителя/статуса воспроизведения не подключены** — `commands.json` содержит только 5 MVP-ключей; расширение — правка конфигурации.
 
 ---
 
 ## Следующая задача
 
-**Sprint 3: Аудиопайплайн**
+**Sprint 4: Wake Word + журнал**
 
-`AndroidAudioRecorder`: `AudioRecord` → `Flow<ByteArray>`, VAD по уровню энергии, отображение уровня сигнала в Debug Screen, запрос `RECORD_AUDIO` в рантайме (уже частично реализовано в Sprint 1 — довести до полноценного пайплайна).
+Активационная фраза как gate перед `IntentRecognizer.recognize()` в
+`VoiceEngine.handleRecognition()`, без изменения самого матчинга; расширение
+обзора журнала неизвестных команд в UI.

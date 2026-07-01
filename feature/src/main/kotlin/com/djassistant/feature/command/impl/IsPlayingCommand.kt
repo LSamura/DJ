@@ -8,7 +8,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class IsPlayingCommand : DjCommand {
     override val intent: DjIntent = DjIntent.QueryIsPlaying
-    override val triggers = listOf("музыка играет", "включена музыка", "что-то играет", "играет ли")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         val isActive = context.audioManager.isMusicActive

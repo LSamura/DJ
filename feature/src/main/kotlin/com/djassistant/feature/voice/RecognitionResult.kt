@@ -2,6 +2,6 @@ package com.djassistant.feature.voice
 
 data class RecognitionResult(
     val text: String,
-    val confidence: Float = 1.0f,
+    val confidence: Float? = null,
     val isFinal: Boolean = true
 )

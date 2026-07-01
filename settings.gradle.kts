@@ -17,6 +17,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Official Vosk Android artifacts (offline speech recognition, ADR-020).
+        maven { url = uri("https://alphacephei.com/maven/") }
     }
 }
 

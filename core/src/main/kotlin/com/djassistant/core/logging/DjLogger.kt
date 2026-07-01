@@ -42,4 +42,6 @@ object DjLogger {
         e("DJ/Permission", message, throwable)
     fun serviceError(message: String, throwable: Throwable? = null) =
         e("DJ/Service", message, throwable)
+    fun voiceError(message: String, throwable: Throwable? = null) =
+        e("DJ/Voice", message, throwable)
 }

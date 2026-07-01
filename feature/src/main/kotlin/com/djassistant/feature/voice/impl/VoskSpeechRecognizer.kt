@@ -1,29 +1,95 @@
 package com.djassistant.feature.voice.impl
 
-import android.content.Context
 import com.djassistant.core.logging.DjLogger
+import com.djassistant.feature.voice.GrammarBuilder
 import com.djassistant.feature.voice.RecognitionResult
 import com.djassistant.feature.voice.SpeechRecognizer
-import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import org.json.JSONObject
+import org.vosk.Model
+import org.vosk.Recognizer
 
-// Real implementation will be added in Sprint 4 (Vosk SDK + grammar mode)
+private const val SAMPLE_RATE_HZ = 16_000f
+
+/**
+ * Offline speech recognition via the Vosk Android SDK, running in Grammar
+ * Mode (ADR-004): the recognizer is restricted to the phrase list built by
+ * [GrammarBuilder] from `commands.json`, which improves accuracy and lowers
+ * CPU cost compared to open-vocabulary recognition.
+ *
+ * The model itself is provisioned locally by [VoskModelProvisioner] — no
+ * network access is ever performed here.
+ */
 @Singleton
 class VoskSpeechRecognizer @Inject constructor(
-    @ApplicationContext private val context: Context
+    private val modelProvisioner: VoskModelProvisioner,
+    private val grammarBuilder: GrammarBuilder
 ) : SpeechRecognizer {
 
-    override val isReady: Boolean = false
+    @Volatile private var model: Model? = null
 
-    override fun startListening(audioFlow: Flow<ByteArray>): Flow<RecognitionResult> {
-        DjLogger.voice("VoskSpeechRecognizer.startListening() — stub, Sprint 4")
-        return emptyFlow()
+    override val isReady: Boolean
+        get() = model != null
+
+    override fun startListening(audioFlow: Flow<ByteArray>): Flow<RecognitionResult> = flow {
+        val modelDir = modelProvisioner.ensureModel()
+        if (modelDir == null) {
+            DjLogger.voiceError("Vosk model not available — see VoskModelProvisioner")
+            return@flow
+        }
+
+        val loadedModel = try {
+            model ?: Model(modelDir.absolutePath).also { model = it }
+        } catch (e: Exception) {
+            DjLogger.voiceError("Failed to load Vosk model", e)
+            return@flow
+        }
+
+        val recognizer = try {
+            Recognizer(loadedModel, SAMPLE_RATE_HZ, grammarBuilder.build()).apply { setWords(true) }
+        } catch (e: Exception) {
+            DjLogger.voiceError("Failed to create Vosk recognizer", e)
+            return@flow
+        }
+
+        DjLogger.voice("Vosk recognizer ready (grammar mode)")
+        try {
+            audioFlow.collect { chunk ->
+                val isFinal = recognizer.acceptWaveForm(chunk, chunk.size)
+                val json = if (isFinal) recognizer.result else recognizer.partialResult
+                parseRecognitionResult(json, isFinal)?.let { emit(it) }
+            }
+        } finally {
+            runCatching { recognizer.close() }
+        }
     }
 
     override fun release() {
         DjLogger.voice("VoskSpeechRecognizer.release()")
+        runCatching { model?.close() }
+        model = null
     }
+
+    private fun parseRecognitionResult(json: String, isFinal: Boolean): RecognitionResult? = runCatching {
+        val root = JSONObject(json)
+        if (!isFinal) {
+            val partial = root.optString("partial")
+            return if (partial.isBlank()) null else RecognitionResult(partial, confidence = null, isFinal = false)
+        }
+
+        val text = root.optString("text")
+        if (text.isBlank()) return null
+
+        val confidence = root.optJSONArray("result")?.takeIf { it.length() > 0 }?.let { words ->
+            var sum = 0.0
+            for (i in 0 until words.length()) {
+                sum += words.getJSONObject(i).optDouble("conf", 0.0)
+            }
+            (sum / words.length()).toFloat()
+        }
+        RecognitionResult(text, confidence = confidence, isFinal = true)
+    }.getOrNull()
 }

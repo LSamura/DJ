@@ -17,6 +17,8 @@ lifecycle = "2.8.6"
 coreKtx = "1.13.1"
 activityCompose = "1.9.2"
 timber = "5.0.1"
+vosk = "0.3.47"
+jna = "5.13.0"
 
 [libraries]
 # Android core
@@ -54,6 +56,10 @@ datastore-preferences = { group = "androidx.datastore", name = "datastore-prefer
 
 # Logging
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
+
+# Offline speech recognition
+vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 
 [bundles]
 compose = [

@@ -7,7 +7,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class NowPlayingCommand : DjCommand {
     override val intent: DjIntent = DjIntent.QueryNowPlaying
-    override val triggers = listOf("что играет", "что за песня", "название", "что сейчас")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         val state = context.stateProvider.getSnapshot()

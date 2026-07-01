@@ -46,11 +46,14 @@ class DjForegroundService : Service() {
                 START_NOT_STICKY
             }
             else -> {
-                // Unexpected / null intent (e.g. system-redelivered). Do not
-                // crash: if we never entered the foreground, just stop.
-                DjLogger.w("DJ/Service", "onStartCommand with no action; stopping if idle")
-                if (!isForegroundActive) stopSelf()
-                START_NOT_STICKY
+                // START_STICKY redelivery after the process was killed comes
+                // in with a null intent by contract — that is exactly the
+                // "please resume" signal, not a reason to stop. Treat it the
+                // same as ACTION_START so the voice pipeline it starts also
+                // comes back automatically (Sprint 3 requirement).
+                DjLogger.service("Null-action onStartCommand — resuming after restart")
+                startForegroundSafely()
+                START_STICKY
             }
         }
     }
@@ -61,6 +64,7 @@ class DjForegroundService : Service() {
             isForegroundActive = false
             serviceStateHolder.updateMode(ServiceMode.Stopped)
         }
+        stopVoiceService()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -80,6 +84,7 @@ class DjForegroundService : Service() {
             isForegroundActive = true
             serviceStateHolder.updateMode(ServiceMode.Running)
             DjLogger.service("Foreground service started")
+            startVoiceService()
         } catch (e: Exception) {
             // On Android 14+ startForeground with a microphone type throws if
             // RECORD_AUDIO is missing. Never let that crash the process.
@@ -96,8 +101,19 @@ class DjForegroundService : Service() {
         DjLogger.service("Stopping foreground service")
         isForegroundActive = false
         serviceStateHolder.updateMode(ServiceMode.Stopped)
+        stopVoiceService()
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             .onFailure { DjLogger.serviceError("stopForeground failed", it) }
         stopSelf()
+    }
+
+    private fun startVoiceService() {
+        runCatching { startService(Intent(this, DjVoiceService::class.java)) }
+            .onFailure { DjLogger.serviceError("Failed to start DjVoiceService", it) }
+    }
+
+    private fun stopVoiceService() {
+        runCatching { stopService(Intent(this, DjVoiceService::class.java)) }
+            .onFailure { DjLogger.serviceError("Failed to stop DjVoiceService", it) }
     }
 }

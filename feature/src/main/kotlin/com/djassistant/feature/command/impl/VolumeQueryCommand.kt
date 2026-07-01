@@ -8,7 +8,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class VolumeQueryCommand : DjCommand {
     override val intent: DjIntent = DjIntent.QueryVolume
-    override val triggers = listOf("какая громкость", "уровень звука", "громко ли", "громкость")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         val current = context.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)

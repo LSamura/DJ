@@ -17,11 +17,4 @@ class CommandRegistry @Inject constructor() {
 
     fun findByIntent(intent: DjIntent): DjCommand? =
         commands.firstOrNull { it.intent::class == intent::class }
-
-    fun findByTrigger(text: String): DjCommand? {
-        val normalized = text.lowercase().trim()
-        return commands.firstOrNull { cmd ->
-            cmd.triggers.any { trigger -> normalized == trigger || normalized.contains(trigger) }
-        }
-    }
 }

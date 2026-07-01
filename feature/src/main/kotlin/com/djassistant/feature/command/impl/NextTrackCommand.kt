@@ -7,7 +7,6 @@ import com.djassistant.feature.intent.DjIntent
 
 class NextTrackCommand : DjCommand {
     override val intent: DjIntent = DjIntent.Next
-    override val triggers = listOf("следующий", "следующая", "дальше", "next", "следующий трек")
 
     override suspend fun execute(context: CommandContext): CommandResult {
         context.mediaRemote.next()
