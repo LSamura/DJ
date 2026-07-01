@@ -146,3 +146,32 @@ core → []
 **Причина:** Позволяет показывать «последнюю ошибку» и «последнюю запись лога» в UI без подключения logcat и без записи на диск. Timber остаётся основным транспортом; буфер — только диагностическая витрина.
 
 **Ограничение:** Данные не персистентны и очищаются при перезапуске процесса — этого достаточно для отладки в рамках Sprint 1.
+
+---
+
+## ADR-015 | 2026-07-01
+### Навигация: iOS-style слайд через параметры `NavHost`, без сторонних библиотек
+
+**Решение:** `enterTransition` / `exitTransition` / `popEnterTransition` / `popExitTransition` заданы напрямую на `NavHost` (Navigation Compose 2.8+): `slideIntoContainer` / `slideOutOfContainer` по горизонтали, `tween(300, FastOutSlowInEasing)`. Fade и затемнение не используются нигде.
+
+**Причина:** Штатный API Navigation Compose уже поддерживает нужный эффект без дополнительных зависимостей. Кросс-fade по умолчанию (или его отсутствие в некоторых версиях) — источник "вспышки", о которой сообщил пользователь; явные slide-transitions устраняют её полностью.
+
+---
+
+## ADR-016 | 2026-07-01
+### Media Layer реализован через framework `android.media.session.*`, без androidx.media
+
+**Решение:** `MediaControllerRepository`, `MediaMetadataMapper` и `DjNotificationListenerService` используют исключительно платформенные классы: `android.media.session.MediaSessionManager`, `MediaController`, `PlaybackState`, `android.media.MediaMetadata`. Библиотека `androidx.media` (media-compat) не подключается.
+
+**Причина:** `minSdk = 26` делает framework API полностью достаточным (session API появился в API 21) — добавление media-compat увеличило бы поверхность зависимостей без выигрыша в совместимости. Соответствует принципу Sprint 2 «изменения аддитивны, зависимости не меняются без необходимости».
+
+**Следствие:** `SessionMediaRemote` — единственная реализация `MediaRemote` и `MediaStateProvider` (заменяет прежнюю прямую привязку `MediaRemote` к `KeyEventMediaRemote` из ADR-007). Транспортные команды идут через `MediaController.transportControls`; если активная сессия ещё не обнаружена (доступ к медиасессиям не выдан или плеер не запущен), `SessionMediaRemote` передаёт вызов в `KeyEventMediaRemote` как fallback — таким образом внешний контракт (`MediaRemote`/`MediaStateProvider`) не меняется, а надёжность растёт. Это досрочно закрывает объём, ранее запланированный на Sprint 7 (ADR-007), по прямому решению из брифа Sprint 2.
+
+---
+
+## ADR-017 | 2026-07-01
+### `MediaPlaybackState.hasAlbumArt: Boolean` вместо хранения `Bitmap`
+
+**Решение:** Наличие обложки трека передаётся булевым флагом, а не самим изображением.
+
+**Причина:** `Bitmap` не переопределяет `equals()`/`hashCode()`, что ломает поведение `StateFlow` (эмиссии не дедуплицируются) и увеличивает риск утечек при хранении в singleton-состоянии. Рендеринг обложки не входит в объём Sprint 2 (нет пайплайна загрузки изображений); при необходимости в будущем спринте обложка будет получена заново из `MediaMetadata.getBitmap()` в момент отображения, а не через постоянное состояние.

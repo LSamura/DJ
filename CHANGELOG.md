@@ -6,6 +6,63 @@
 
 ---
 
+## [0.2.0] — 2026-07-01 — Sprint 1 Final Polish + Sprint 2: Media Layer
+
+Sprint 1 подтверждён как завершённый после полного ручного тестирования на
+реальном устройстве. Перед Sprint 2 выполнена точечная полировка интерфейса,
+затем реализован Media Layer — единственная точка взаимодействия с
+музыкальными приложениями Android.
+
+### Sprint 1 Final Polish
+
+**Изменено:**
+- Навигация между экранами переведена на iOS-style push/pop:
+  новый экран плавно появляется справа, предыдущий уходит влево; при
+  возврате — зеркальная анимация. Fade, затемнение и "вспышка" перехода
+  устранены (`enterTransition`/`exitTransition`/`popEnterTransition`/
+  `popExitTransition` на `NavHost`, `slideIntoContainer`/`slideOutOfContainer`,
+  300 мс, `FastOutSlowInEasing`).
+- Debug Screen: секция воспроизведения при отсутствии активной медиасессии
+  показывает явный, понятный статус вместо пустых полей (переработана в
+  контексте Sprint 2 — см. ниже, финальный вид уже содержит реальные данные,
+  а не временную заглушку).
+
+### Sprint 2: Media Layer
+
+**Добавлено:**
+- `MediaControllerRepository` (`feature/media/impl`) — единственная точка
+  работы с `android.media.session.MediaController`: список активных сессий,
+  выбор "активной" сессии, регистрация `MediaController.Callback`,
+  диспетчеризация Play/Pause/Next/Previous через `transportControls`.
+- `MediaMetadataMapper` — `MediaMetadata`/`PlaybackState` → `MediaPlaybackState`.
+- `DjNotificationListenerService` (`:service`) — обнаружение активных
+  `MediaSession` через `MediaSessionManager.getActiveSessions()`; не читает
+  содержимое уведомлений.
+- `MediaPlaybackState.hasAlbumArt: Boolean` — наличие обложки трека.
+- `NotificationAccess` (UI) — проверка и запрос особого разрешения "доступ к
+  уведомлениям" для Media Layer, кнопка в SettingsScreen.
+- Debug Screen: секция «Воспроизведение» — состояние, трек, исполнитель,
+  альбом, обложка, позиция, длительность, громкость, активный плеер.
+
+**Изменено:**
+- `SessionMediaRemote` переписан: теперь единственная реализация `MediaRemote`
+  + `MediaStateProvider` (ранее `MediaRemote` был напрямую привязан к
+  `KeyEventMediaRemote`, а `SessionMediaRemote` был пустой заглушкой).
+  Транспортные команды идут через `MediaController`; при отсутствии активной
+  сессии — fallback на `KeyEventMediaRemote` (медиа-клавиши), без изменения
+  внешнего контракта.
+- `AppModule.bindMediaRemote` теперь привязывает `SessionMediaRemote` вместо
+  `KeyEventMediaRemote`.
+
+**Ограничения Sprint 2:**
+- Доступ к медиасессиям — особое разрешение ОС, включается только вручную
+  через системные настройки; онбординга при первом запуске нет.
+- Обложка трека определяется только по наличию, без рендеринга изображения.
+- Информационные голосовые команды по-прежнему не подключены к Media Layer
+  (это Sprint 5).
+
+---
+
 ## [0.1.1] — 2026-07-01 — Sprint 1: Bug Fix & Production Ready
 
 Стабилизация Sprint 1 по результатам ручного тестирования на реальном

@@ -19,7 +19,6 @@ import com.djassistant.feature.intent.IntentRecognizer
 import com.djassistant.feature.intent.impl.KeywordIntentRecognizer
 import com.djassistant.feature.media.MediaRemote
 import com.djassistant.feature.media.MediaStateProvider
-import com.djassistant.feature.media.impl.KeyEventMediaRemote
 import com.djassistant.feature.media.impl.SessionMediaRemote
 import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.settings.impl.DataStoreSettingsRepository
@@ -44,7 +43,7 @@ abstract class AppModule {
     abstract fun bindSettingsRepository(impl: DataStoreSettingsRepository): SettingsRepository
 
     @Binds @Singleton
-    abstract fun bindMediaRemote(impl: KeyEventMediaRemote): MediaRemote
+    abstract fun bindMediaRemote(impl: SessionMediaRemote): MediaRemote
 
     @Binds @Singleton
     abstract fun bindMediaStateProvider(impl: SessionMediaRemote): MediaStateProvider

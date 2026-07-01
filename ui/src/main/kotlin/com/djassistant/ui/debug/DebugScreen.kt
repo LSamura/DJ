@@ -41,6 +41,7 @@ import com.djassistant.core.logging.DjLogBuffer
 import com.djassistant.ui.components.AudioLevelBar
 import com.djassistant.ui.components.StatusIndicator
 import com.djassistant.ui.permissions.AppPermissions
+import com.djassistant.ui.permissions.NotificationAccess
 import com.djassistant.ui.theme.DjRed
 import com.djassistant.ui.theme.SurfaceVariantDark
 import java.text.SimpleDateFormat
@@ -66,11 +67,13 @@ fun DebugScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var permissionStatus by remember { mutableStateOf(AppPermissions.status(context)) }
+    var notificationAccessEnabled by remember { mutableStateOf(NotificationAccess.isEnabled(context)) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 permissionStatus = AppPermissions.status(context)
+                notificationAccessEnabled = NotificationAccess.isEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -120,6 +123,7 @@ fun DebugScreen(
             DebugSection("Разрешения") {
                 DebugRow("Микрофон") { DebugValue(if (permissionStatus.microphone) "Выдано" else "Нет") }
                 DebugRow("Уведомления") { DebugValue(if (permissionStatus.notifications) "Выдано" else "Нет") }
+                DebugRow("Доступ к медиасессиям") { DebugValue(if (notificationAccessEnabled) "Выдано" else "Нет") }
             }
 
             DebugSection("Последняя ошибка") {
@@ -152,12 +156,25 @@ fun DebugScreen(
                 DebugRow("Последний результат") { DebugValue(lastInfo ?: "—") }
             }
 
-            DebugSection("Медиасессия") {
-                DebugRow("Играет") { DebugValue(if (mediaState.isPlaying) "Да" else "Нет") }
-                DebugRow("Трек") { DebugValue(mediaState.trackTitle ?: "—") }
-                DebugRow("Исполнитель") { DebugValue(mediaState.artist ?: "—") }
-                DebugRow("Громкость") { DebugValue("${mediaState.volumePercent}%") }
-                DebugRow("Приложение") { DebugValue(mediaState.activeAppName ?: "—") }
+            DebugSection("Воспроизведение") {
+                if (mediaState.activeAppPackage == null) {
+                    Text(
+                        text = "Недоступно — нет активной медиасессии.\n" +
+                            "Нужен доступ к медиасессиям (Настройки) и запущенный плеер.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                } else {
+                    DebugRow("Состояние") { DebugValue(if (mediaState.isPlaying) "Играет" else "Пауза") }
+                    DebugRow("Трек") { DebugValue(mediaState.trackTitle ?: "—") }
+                    DebugRow("Исполнитель") { DebugValue(mediaState.artist ?: "—") }
+                    DebugRow("Альбом") { DebugValue(mediaState.album ?: "—") }
+                    DebugRow("Обложка") { DebugValue(if (mediaState.hasAlbumArt) "Есть" else "Нет") }
+                    DebugRow("Позиция") { DebugValue(formatDuration(mediaState.positionMs)) }
+                    DebugRow("Длительность") { DebugValue(formatDuration(mediaState.durationMs)) }
+                    DebugRow("Громкость") { DebugValue("${mediaState.volumePercent}%") }
+                    DebugRow("Плеер") { DebugValue(mediaState.activeAppName ?: mediaState.activeAppPackage ?: "—") }
+                }
             }
 
             DebugSection("Журнал (${recentLogs.size})") {
@@ -213,6 +230,14 @@ fun DebugScreen(
 private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
 private fun formatTime(timestampMs: Long): String = timeFormat.format(Date(timestampMs))
+
+private fun formatDuration(ms: Long): String {
+    if (ms <= 0) return "—"
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
+}
 
 @Composable
 private fun DebugSection(title: String, content: @Composable () -> Unit) {

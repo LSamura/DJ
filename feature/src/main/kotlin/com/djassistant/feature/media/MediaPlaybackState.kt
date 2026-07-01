@@ -5,6 +5,7 @@ data class MediaPlaybackState(
     val trackTitle: String? = null,
     val artist: String? = null,
     val album: String? = null,
+    val hasAlbumArt: Boolean = false,
     val volumePercent: Int = 0,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
