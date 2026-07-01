@@ -10,5 +10,6 @@ data class MediaPlaybackState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val activeAppPackage: String? = null,
-    val activeAppName: String? = null
+    val activeAppName: String? = null,
+    val playbackSource: PlaybackSource = PlaybackSource.NO_ACTIVE_SESSION
 )

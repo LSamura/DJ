@@ -1,12 +1,12 @@
 # PROJECT_STATE.md
 
-_Обновлено: 2026-07-01 | Sprint 2 (Media Layer)_
+_Обновлено: 2026-07-01 | Sprint 2 (Media Layer) — Final Polish завершён_
 
 ---
 
 ## Текущее состояние
 
-**Sprint 1 и Sprint 2 завершены.** Ручное тестирование Sprint 1 пройдено полностью на реальном устройстве. Media Layer реализован и является единственной точкой взаимодействия с музыкальными приложениями.
+**Sprint 1 и Sprint 2 полностью завершены**, включая финальную полировку Media Layer. Ручное тестирование Sprint 1 пройдено полностью на реальном устройстве. Media Layer — единственная точка взаимодействия с музыкальными приложениями, готов к интеграции Voice Layer.
 
 Проект:
 - Открывается в Android Studio
@@ -15,6 +15,7 @@ _Обновлено: 2026-07-01 | Sprint 2 (Media Layer)_
 - Не падает при отсутствии разрешений — запрашивает их автоматически
 - Сервис стабильно запускается и останавливается, уведомление отображается
 - Управляет реальными плеерами (Spotify, AIMP, YouTube Music и др.) через `MediaController`, с fallback на медиа-клавиши
+- Позиция трека в Debug Screen обновляется плавно (~300 мс), без лишних запросов к MediaSession
 - Готов к реализации Sprint 3 (аудиопайплайн для Voice Layer)
 
 ---
@@ -70,6 +71,63 @@ _Обновлено: 2026-07-01 | Sprint 2 (Media Layer)_
 - Голосовые информационные команды («Что играет?» и т.д.) по-прежнему не
   подключены к Media Layer — это задача Sprint 5 вместе с остальным
   голосовым циклом.
+
+---
+
+## Sprint 2 Final Polish (2026-07-01)
+
+**Реализовано:**
+
+1. **Плавное обновление позиции трека.** `MediaControllerRepository` больше
+   не пересчитывает состояние из `controller.playbackState`/`controller.metadata`
+   при каждом тике — вместо этого кэширует последний снимок из параметров
+   `MediaController.Callback` (`onPlaybackStateChanged`/`onMetadataChanged`) в
+   `snapshots: Map<MediaController, Snapshot>`. Локальный тикер
+   (`~300 мс`, корутина на `Dispatchers.Main`) вычисляет позицию по формуле
+   `position + elapsed × playbackSpeed` на основе `PlaybackState.position`,
+   `lastPositionUpdateTime` и `playbackSpeed` — без единого дополнительного
+   обращения к MediaSession. Тикер запускается только когда `isPlaying == true`
+   и немедленно останавливается на паузе/остановке. При получении нового
+   `PlaybackState` кэш обновляется и локальный расчёт синхронизируется сам
+   (следующий тик использует свежий снимок).
+2. **Playback Source в Debug Screen.** Новое поле
+   `MediaPlaybackState.playbackSource: PlaybackSource` (`MEDIA_SESSION` /
+   `KEY_EVENT_FALLBACK` / `NO_ACTIVE_SESSION`), вычисляется в
+   `MediaControllerRepository.recomputeState()`: если есть активный
+   `MediaController` — `MEDIA_SESSION`; если сессии нет, но
+   `audioManager.isMusicActive == true` — `KEY_EVENT_FALLBACK` (команды
+   всё ещё дойдут через медиа-клавиши); иначе — `NO_ACTIVE_SESSION`.
+3. **UX разрешения на доступ к медиасессиям.** В `SettingsScreen`, при
+   отсутствии доступа, компактная строка заменена на развёрнутую карточку с
+   объяснением (зачем нужно разрешение, что приложение не читает содержимое
+   уведомлений, для чего конкретно используется доступ) и кнопкой перехода в
+   системные настройки. Карточка показывается **только** при отсутствии
+   разрешения; при наличии — компактная строка со статусом, как раньше.
+
+**Самопроверка совместимости (повторный обзор логики, без изменения архитектуры):**
+
+| Сценарий | Проверено |
+|---|---|
+| Spotify: Play/Pause/Next/Previous | Транспорт идёт через `MediaController.transportControls`, поведение не изменилось |
+| AIMP | Fallback на `KeyEventMediaRemote` при отсутствии `MediaSession` работает как раньше |
+| YouTube Music | Аналогично Spotify |
+| Нет активного плеера | `PlaybackSource.NO_ACTIVE_SESSION`/`KEY_EVENT_FALLBACK` корректно вычисляются, тикер не запускается (`isPlaying == false`) |
+| Переключение между плеерами | `activeController()` пересчитывается при каждом `updateSessions()`/callback; тикер останавливается для старой сессии и запускается для новой при необходимости |
+| Повторный запуск приложения | `MediaControllerRepository` — Hilt singleton уровня приложения; при живом процессе состояние сохраняется, при перезапуске процесса переинициализируется пустым и восстанавливается через `onListenerConnected()` |
+| Запуск после перезагрузки телефона | `NotificationListenerService` — системный компонент, ОС автоматически перепривязывает его при загрузке без дополнительного `BOOT_COMPLETED`-ресивера |
+| Смена трека / пауза / next / previous | `onMetadataChanged`/`onPlaybackStateChanged` обновляют кэш снимка немедленно, `recomputeState()` вызывается на каждое событие |
+
+> Полный прогон на реальных устройствах выполняется пользователем в Android
+> Studio — в этом окружении нет Android SDK, поэтому Gradle-сборка
+> недоступна; проверка выше — по коду и API-контрактам framework-классов.
+
+**Производительность:**
+- Тикер работает только пока `isPlaying == true`; на паузе поток
+  останавливается (`Job.cancel()`), лишней нагрузки в простое нет.
+- Обновление позиции — чистая арифметика (`SystemClock.elapsedRealtime()` +
+  вычитание), без обращений к `MediaSession`/`Binder` на каждый тик.
+- `_state` — `MutableStateFlow`, эмиссия происходит, только когда
+  `positionMs` действительно изменился (проверка перед записью).
 
 ---
 
@@ -132,9 +190,10 @@ _Обновлено: 2026-07-01 | Sprint 2 (Media Layer)_
 - `ServiceController` / `DjServiceController` — управление сервисом из UI, с защитой от повторного старта/остановки
 
 ### Media Layer (единственная точка взаимодействия с плеерами)
-- `MediaControllerRepository` — управление списком `MediaController`, transport-команды, наблюдение состояния
-- `MediaMetadataMapper` — маппинг `MediaMetadata`/`PlaybackState` → `MediaPlaybackState`
+- `MediaControllerRepository` — управление списком `MediaController`, transport-команды, наблюдение состояния, плавный локальный тикер позиции, вычисление `PlaybackSource`
+- `MediaMetadataMapper` — маппинг кэшированных `MediaMetadata`/`PlaybackState` → `MediaPlaybackState` (без обращения к MediaSession)
 - `SessionMediaRemote` — единственная реализация `MediaRemote` + `MediaStateProvider`, с fallback на `KeyEventMediaRemote`
+- `PlaybackSource` — диагностика: `MEDIA_SESSION` / `KEY_EVENT_FALLBACK` / `NO_ACTIVE_SESSION`
 
 ### Архитектурные слои (все интерфейсы финальной архитектуры)
 - **Voice**: `AudioRecorder`, `SpeechRecognizer`, `GrammarBuilder` (stubs — Sprint 3/4)

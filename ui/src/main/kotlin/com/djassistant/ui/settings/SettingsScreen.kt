@@ -1,13 +1,19 @@
 package com.djassistant.ui.settings
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -17,7 +23,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -107,31 +112,55 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
-            ListItem(
-                headlineContent = { Text("Доступ к медиасессиям") },
-                supportingContent = {
-                    Text(
-                        if (notificationAccessEnabled) {
-                            "Предоставлен — Media Layer видит активные плееры"
-                        } else {
-                            "Нужен для управления треком и получения его метаданных"
-                        }
-                    )
-                },
-                trailingContent = {
-                    if (notificationAccessEnabled) {
+            if (notificationAccessEnabled) {
+                ListItem(
+                    headlineContent = { Text("Доступ к медиасессиям") },
+                    supportingContent = { Text("Предоставлен — Media Layer видит активные плееры") },
+                    trailingContent = {
                         Icon(
                             Icons.Default.CheckCircle,
                             contentDescription = "Предоставлен",
                             tint = StatusRunning
                         )
-                    } else {
-                        TextButton(onClick = { context.startActivity(NotificationAccess.settingsIntent()) }) {
-                            Text("Открыть")
+                    }
+                )
+            } else {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Доступ к медиасессиям",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Android требует предоставить доступ к медиасессиям, " +
+                                "чтобы приложение могло управлять воспроизведением и " +
+                                "получать информацию о текущем треке.\n\n" +
+                                "Приложение не читает содержимое ваших уведомлений.\n\n" +
+                                "Разрешение используется только для обнаружения активной " +
+                                "медиасессии (MediaSession).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Button(onClick = { context.startActivity(NotificationAccess.settingsIntent()) }) {
+                                Text("Открыть настройки")
+                            }
                         }
                     }
                 }
-            )
+            }
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }

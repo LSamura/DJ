@@ -175,3 +175,23 @@ core → []
 **Решение:** Наличие обложки трека передаётся булевым флагом, а не самим изображением.
 
 **Причина:** `Bitmap` не переопределяет `equals()`/`hashCode()`, что ломает поведение `StateFlow` (эмиссии не дедуплицируются) и увеличивает риск утечек при хранении в singleton-состоянии. Рендеринг обложки не входит в объём Sprint 2 (нет пайплайна загрузки изображений); при необходимости в будущем спринте обложка будет получена заново из `MediaMetadata.getBitmap()` в момент отображения, а не через постоянное состояние.
+
+---
+
+## ADR-018 | 2026-07-01
+### Позиция трека вычисляется локально, без повторных запросов к MediaSession
+
+**Решение:** `MediaControllerRepository` кэширует последний `MediaMetadata`/`PlaybackState`, полученный через параметры `MediaController.Callback` (`onMetadataChanged`/`onPlaybackStateChanged`), в `snapshots: Map<MediaController, Snapshot>`. Локальный тикер на `Dispatchers.Main` (интервал 300 мс) вычисляет отображаемую позицию по формуле `PlaybackState.position + (SystemClock.elapsedRealtime() - lastPositionUpdateTime) × playbackSpeed` — без единого дополнительного обращения к `MediaController`/`MediaSession`. Тикер запускается только когда активная сессия воспроизводит (`isPlaying == true`) и останавливается немедленно на паузе.
+
+**Причина:** `MediaController.getPlaybackState()`/`getMetadata()` — синхронные вызовы через Binder к процессу плеера; опрашивать их каждые 250–300 мс означало бы постоянную межпроцессную нагрузку. Кэширование снимка из колбэка (доставляется уже с нужными данными) и локальная экстраполяция времени — стандартный паттерн, которым пользуются Android Auto и Spotify Connect для плавного прогресс-бара.
+
+**Следствие:** `MediaMetadataMapper.map()` больше не принимает `MediaController` — только `packageName`, кэшированные `metadata`/`playbackState` и `appName`, что делает маппер чистой функцией без побочных IPC-вызовов.
+
+---
+
+## ADR-019 | 2026-07-01
+### `PlaybackSource` — диагностика способа взаимодействия с плеером
+
+**Решение:** `MediaPlaybackState.playbackSource: PlaybackSource` принимает одно из трёх значений: `MEDIA_SESSION` (есть активный `MediaController`), `KEY_EVENT_FALLBACK` (сессии нет, но `AudioManager.isMusicActive == true` — команды дойдут через медиа-клавиши) или `NO_ACTIVE_SESSION` (ни сессии, ни звука). Значение вычисляется в `MediaControllerRepository.recomputeState()` и отображается в Debug Screen.
+
+**Причина:** Без этого поля тестировщику/разработчику не видно, почему конкретная voice/UI-команда сработала или нет — эта диагностика напрямую запрошена в финальной полировке Sprint 2 как способ сразу понимать текущий механизм взаимодействия с плеером.

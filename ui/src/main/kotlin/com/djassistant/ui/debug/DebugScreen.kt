@@ -38,6 +38,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.djassistant.core.logging.DjLogBuffer
+import com.djassistant.feature.media.PlaybackSource
 import com.djassistant.ui.components.AudioLevelBar
 import com.djassistant.ui.components.StatusIndicator
 import com.djassistant.ui.permissions.AppPermissions
@@ -157,12 +158,14 @@ fun DebugScreen(
             }
 
             DebugSection("Воспроизведение") {
+                DebugRow("Источник") { DebugValue(mediaState.playbackSource.displayName()) }
                 if (mediaState.activeAppPackage == null) {
                     Text(
                         text = "Недоступно — нет активной медиасессии.\n" +
                             "Нужен доступ к медиасессиям (Настройки) и запущенный плеер.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 } else {
                     DebugRow("Состояние") { DebugValue(if (mediaState.isPlaying) "Играет" else "Пауза") }
@@ -237,6 +240,12 @@ private fun formatDuration(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
+}
+
+private fun PlaybackSource.displayName(): String = when (this) {
+    PlaybackSource.MEDIA_SESSION -> "MediaSession"
+    PlaybackSource.KEY_EVENT_FALLBACK -> "Резерв (медиа-клавиши)"
+    PlaybackSource.NO_ACTIVE_SESSION -> "Нет активной сессии"
 }
 
 @Composable
