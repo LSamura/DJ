@@ -1,12 +1,12 @@
 # PROJECT_STATE.md
 
-_Обновлено: 2026-07-01 | Sprint 3.1.1 (Bluetooth SCO lifecycle redesign)_
+_Обновлено: 2026-07-01 | Sprint 3.2 (Voice UX Polish)_
 
 ---
 
 ## Текущее состояние
 
-**Sprint 1, Sprint 2, Sprint 3, Sprint 3.1 и Sprint 3.1.1 реализованы.** Media Layer стабилен и протестирован на реальном устройстве. Voice Layer реализован полностью в коде: микрофон → Vosk → Intent Parser → Media Layer, с двумя режимами прослушивания (Continuous/Wake Mode), порогом confidence, расширенным словарём команд, управлением громкостью и корректным жизненным циклом Bluetooth SCO (активен только во время реальной записи команды, никогда в состоянии ожидания). **Офлайн-модель Vosk теперь входит в репозиторий** (`feature/src/main/assets/model/`, добавлена после Sprint 3) — прежний блокер снят.
+**Sprint 1, Sprint 2, Sprint 3, Sprint 3.1, Sprint 3.1.1 и Sprint 3.2 реализованы.** Media Layer стабилен и протестирован на реальном устройстве. Voice Layer реализован полностью в коде: микрофон → Vosk → Intent Parser → Media Layer, с двумя режимами прослушивания (Continuous/Wake Mode), порогом confidence, расширенным словарём команд, управлением громкостью и корректным жизненным циклом Bluetooth SCO (активен только во время реальной записи команды, никогда в состоянии ожидания). Wake Mode теперь ждёт wake-фразу тихо и без перезапусков (исправлен `[unk]`-баг), появляется несблокирующий оверлей с таймером и пульсацией, звуковые сигналы можно отключить. **Офлайн-модель Vosk теперь входит в репозиторий** (`feature/src/main/assets/model/`, добавлена после Sprint 3) — прежний блокер снят.
 
 Проект:
 - Открывается в Android Studio
@@ -254,6 +254,76 @@ Wake Mode и всю сессию Continuous Mode) — Bluetooth-гарнитур
 
 ---
 
+## Sprint 3.2 — Voice UX Polish (2026-07-01)
+
+**Проблема, обнаруженная пользователем:** после Sprint 3.1.1 Wake Mode
+по-прежнему "ощущалось как Continuous Mode", и Bluetooth-качество всё ещё
+деградировало. Пользователь явно попросил проверить это по коду и
+исправить, если реализация действительно держит `VoiceEngine` активным
+постоянно.
+
+### Корневая причина (найдена и исправлена)
+
+`VoskWakeWordDetector.waitForWakeWord()` завершал ожидание по предикату
+`.first { it.isFinal && it.text.isNotBlank() }`. В Grammar Mode Vosk
+возвращает буквальную непустую строку `"[unk]"` для ЛЮБОЙ речи/шума, не
+входящих в ограниченный словарь wake-фраз — значит, предикат срабатывал
+почти на любой звук, `waitForWakeWord()` возвращал `false` («не
+обнаружено»), и `VoiceEngine.runWakeWordSession()` тут же пересоздавал всю
+сессию (новый `AudioRecord`, новый `Recognizer`). Именно этот цикл
+перезапусков и создавал ощущение "как Continuous Mode" — а не то, что
+движок буквально никогда не засыпал. Исправлено: предикат теперь
+`.first { it.isFinal && WAKE_PHRASES.any { phrase -> it.text.contains(phrase) } }`
+— ожидание завершается только на реальном совпадении с wake-фразой;
+`"[unk]"`/пустые финалы проходят мимо, не прерывая сессию.
+
+### Что ещё изменено
+
+- **`VoiceEngineState`** расширен до `Idle, Initializing, WaitingWakeWord,
+  Listening, Processing, Executing, Sleep, Error` — виден на Debug Screen,
+  отражает полный жизненный цикл вместо прежних 4 значений.
+- **Таймер диалогового окна** (`RecognitionOutcome.extendWindow`) теперь
+  продлевается только когда `CommandDispatcher` реально вернул
+  `Success`/`SuccessWithInfo` — отклонённые по confidence, `[unk]`-шум и
+  неудавшиеся команды больше не продлевают окно.
+- **`FeedbackManager.onActivation()`** подключён в момент обнаружения wake
+  word (`VoiceEngine.runWakeWordSession()`), используя уже существующий с
+  Sprint 1 `ToneGenerator`/`TONE_PROP_BEEP`. Success/error сигналы уже были
+  подключены через `CommandDispatcher`.
+- **`DjSettings.soundFeedbackEnabled`** (по умолчанию `true`) + переключатель
+  в `SettingsScreen` + `BeepFeedbackManager` теперь читает настройку через
+  собственный `CoroutineScope`, коллекционирующий `SettingsRepository.settings`.
+- **`VoiceOverlayController`** (`service/overlay`) — компактный
+  несблокирующий оверлей на чистых Android View + `WindowManager`
+  (`TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_TOUCHABLE | FLAG_NOT_FOCUSABLE |
+  FLAG_LAYOUT_NO_LIMITS`), без Compose (`:service` остаётся Compose-free).
+  Показывает "🎧 DJ — Слушаю.../Распознаю.../Выполняю..." и обратный отсчёт
+  секунд; появляется fade+scale с `OvershootInterpolator`, пульсирующая
+  точка-индикатор через `ValueAnimator`. Показывается только на время
+  диалогового окна Wake Mode; `hide()` вызывается и по завершении окна, и в
+  `VoiceEngine.stop()`.
+- **`OverlayAccess`** helper (`ui/permissions`, по аналогии с
+  `NotificationAccess`) + карточка в `SettingsScreen` для выдачи
+  `SYSTEM_ALERT_WINDOW`.
+- **`VoiceStateHolder.remainingWindowSeconds`** — новый `StateFlow<Int?>`,
+  показывается и на Debug Screen, и в оверлее.
+
+### Ограничения / не проверено в этой среде
+
+- Нет Android SDK, физического устройства и Bluetooth-гарнитуры в
+  песочнице — сборка проекта (`./gradlew :service:compileDebugKotlin`)
+  падает с `SDK location not found`, поэтому код проверен только вручную
+  (чтением, трассировкой типов и сопоставлением сигнатур), а не компиляцией.
+- Реальный вид оверлея, ощущение пульсации/анимаций и фактическое
+  восстановление A2DP при Bluetooth должны быть проверены пользователем на
+  устройстве.
+- Пружинные анимации (`androidx.dynamicanimation`) и блюр карточки
+  (`RenderEffect`, API 31+) сознательно не добавлялись — не требовались для
+  выполнения десяти пунктов задания; текущая анимация построена на
+  стандартных `View.animate()`/`ValueAnimator`.
+
+---
+
 ## Sprint 2 — Media Layer (2026-07-01)
 
 **Реализовано:**
@@ -479,14 +549,19 @@ Wake Mode и всю сессию Continuous Mode) — Bluetooth-гарнитур
 
 ### UI
 - `MainScreen` — статус сервиса, чек-лист готовности, кнопки Start/Stop, версия, результат команды, `animateContentSize()` на карточках
-- `SettingsScreen` — автозапуск, показ DebugScreen, доступ к медиасессиям,
+- `SettingsScreen` — автозапуск, показ DebugScreen, звуковые сигналы (вкл/выкл),
+  доступ к медиасессиям, доступ к оверлею («Draw over other apps»),
   слайдер confidence threshold (50–95%), выбор режима Continuous/Wake Mode,
-  слайдер диалогового окна (3–15 сек)
+  слайдер диалогового окна (3–15 сек), выбор источника микрофона
 - `DebugScreen` — сервис, разрешения, последняя ошибка, аудио (+ источник
-  микрофона), **Voice** (статус, режим, модель, Raw/Normalized Text,
-  confidence, Intent, Action, Execution Result, Reject Reason, время
-  обработки + журнал последних 10 команд с теми же полями), воспроизведение
-  (Media Layer), журнал логов, `animateContentSize()` на секциях
+  микрофона), **Voice** (статус — 8 состояний, режим, обратный отсчёт окна,
+  модель, Raw/Normalized Text, confidence, Intent, Action, Execution
+  Result, Reject Reason, время обработки + журнал последних 10 команд с
+  теми же полями), воспроизведение (Media Layer), журнал логов,
+  `animateContentSize()` на секциях
+- `VoiceOverlayController` — несблокирующий floating-оверлей (WindowManager,
+  чистые Android View, без Compose) поверх других приложений на время
+  диалогового окна Wake Mode
 - Navigation Compose: Main ↔ Settings, Main ↔ Debug, iOS-style transitions
 - Dark theme (Material3)
 
@@ -519,9 +594,14 @@ Wake Mode и всю сессию Continuous Mode) — Bluetooth-гарнитур
 3. **Доступ к медиасессиям выдаётся только вручную** — нет автоматического запроса/онбординга, только кнопка в Настройках.
 4. **Автозапуск без разрешений** — при холодном старте не показывает системный запрос (разрешения запрашиваются по кнопке «Запустить»).
 5. **`runBlocking` в `autoStartServiceIfNeeded`** — приемлемо для чтения начальных настроек, стоит перенести в корутину в одном из следующих спринтов.
-6. **Sprint 3.1/3.1.1 не проверены на реальном устройстве агентом** — нет
-   Android SDK, микрофона, Bluetooth-гарнитуры в среде сборки. Проверено по
-   коду и API-контрактам; финальная проверка сценариев — за пользователем.
+6. **Sprint 3.1/3.1.1/3.2 не проверены на реальном устройстве агентом** — нет
+   Android SDK, микрофона, Bluetooth-гарнитуры в среде сборки (сборка падает
+   с `SDK location not found`). Проверено по коду и API-контрактам;
+   финальная проверка сценариев — за пользователем.
+7. **Оверлей использует стандартные `View.animate()`/`ValueAnimator`**, а не
+   `androidx.dynamicanimation` пружины или `RenderEffect`-блюр (API 31+) —
+   этого не требовалось для выполнения задания Sprint 3.2 буквально;
+   полноценный Apple-style редизайн не входил в scope.
 
 ---
 
@@ -532,3 +612,5 @@ Wake Mode и всю сессию Continuous Mode) — Bluetooth-гарнитур
 Заменить `VoskWakeWordDetector` на специализированный движок (Porcupine или
 OpenWakeWord) через существующий интерфейс `WakeWordDetector` — без
 изменения `VoiceEngine`; расширить обзор журнала неизвестных команд в UI.
+Дополнительно можно вернуться к Apple-style полировке (пружинные анимации,
+блюр), если пользователь захочет углубить редизайн начатый в Sprint 3.2.

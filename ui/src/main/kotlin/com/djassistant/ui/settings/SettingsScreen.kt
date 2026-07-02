@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
 import com.djassistant.ui.permissions.NotificationAccess
+import com.djassistant.ui.permissions.OverlayAccess
 import com.djassistant.ui.theme.StatusRunning
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,11 +60,13 @@ fun SettingsScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var notificationAccessEnabled by remember { mutableStateOf(NotificationAccess.isEnabled(context)) }
+    var overlayAccessEnabled by remember { mutableStateOf(OverlayAccess.isEnabled(context)) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 notificationAccessEnabled = NotificationAccess.isEnabled(context)
+                overlayAccessEnabled = OverlayAccess.isEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -115,6 +118,68 @@ fun SettingsScreen(
                     )
                 }
             )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            ListItem(
+                headlineContent = { Text("Звуковые сигналы") },
+                supportingContent = { Text("Короткий сигнал при активации и выполнении команды") },
+                trailingContent = {
+                    Switch(
+                        checked = settings.soundFeedbackEnabled,
+                        onCheckedChange = viewModel::setSoundFeedbackEnabled
+                    )
+                }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            if (overlayAccessEnabled) {
+                ListItem(
+                    headlineContent = { Text("Оверлей поверх экрана") },
+                    supportingContent = { Text("Предоставлен — окно \"Слушаю...\" будет показываться") },
+                    trailingContent = {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Предоставлен",
+                            tint = StatusRunning
+                        )
+                    }
+                )
+            } else {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Оверлей поверх экрана",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Без этого разрешения индикатор \"Слушаю...\" во время " +
+                                "диалогового окна показан не будет — голосовое управление " +
+                                "продолжит работать, просто без визуальной подсказки.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Button(onClick = { context.startActivity(OverlayAccess.settingsIntent(context)) }) {
+                                Text("Открыть настройки")
+                            }
+                        }
+                    }
+                }
+            }
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 

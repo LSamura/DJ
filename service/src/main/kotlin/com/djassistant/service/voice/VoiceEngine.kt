@@ -9,6 +9,7 @@ import com.djassistant.core.extensions.stripWakeWord
 import com.djassistant.core.logging.DjLogger
 import com.djassistant.feature.command.CommandDispatcher
 import com.djassistant.feature.command.CommandResult
+import com.djassistant.feature.feedback.FeedbackManager
 import com.djassistant.feature.intent.DjIntent
 import com.djassistant.feature.intent.IntentRecognizer
 import com.djassistant.feature.settings.DjSettings
@@ -22,6 +23,7 @@ import com.djassistant.feature.voice.VoiceListeningMode
 import com.djassistant.feature.voice.WakeWordDetector
 import com.djassistant.service.ServiceMode
 import com.djassistant.service.ServiceStateHolder
+import com.djassistant.service.overlay.VoiceOverlayController
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -79,7 +81,9 @@ class VoiceEngine @Inject constructor(
     private val commandDispatcher: CommandDispatcher,
     private val settingsRepository: SettingsRepository,
     private val serviceStateHolder: ServiceStateHolder,
-    private val voiceStateHolder: VoiceStateHolder
+    private val voiceStateHolder: VoiceStateHolder,
+    private val feedbackManager: FeedbackManager,
+    private val voiceOverlayController: VoiceOverlayController
 ) {
 
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -102,8 +106,10 @@ class VoiceEngine @Inject constructor(
         job = null
         audioRecorder.stop()
         speechRecognizer.release()
+        voiceOverlayController.hide()
         voiceStateHolder.setModelLoaded(false)
-        voiceStateHolder.updateEngineState(VoiceEngineState.Stopped)
+        voiceStateHolder.updateRemainingWindowSeconds(null)
+        voiceStateHolder.updateEngineState(VoiceEngineState.Idle)
     }
 
     private suspend fun runPipeline() {
@@ -148,8 +154,8 @@ class VoiceEngine @Inject constructor(
             .collect { result ->
                 voiceStateHolder.setModelLoaded(true)
                 if (!result.isFinal || result.text.isBlank()) return@collect
-                val modeSwitch = handleRecognition(result)
-                if (modeSwitch == VoiceListeningMode.WAKE_WORD) {
+                val outcome = handleRecognition(result)
+                if (outcome.modeSwitch == VoiceListeningMode.WAKE_WORD) {
                     currentListeningMode = VoiceListeningMode.WAKE_WORD
                     switchRequested = true
                 }
@@ -161,12 +167,17 @@ class VoiceEngine @Inject constructor(
     }
 
     private suspend fun runWakeWordSession() {
-        voiceStateHolder.updateEngineState(VoiceEngineState.WaitingForWakeWord)
+        voiceStateHolder.updateEngineState(VoiceEngineState.WaitingWakeWord)
+        voiceStateHolder.updateRemainingWindowSeconds(null)
         serviceStateHolder.updateMode(ServiceMode.Running)
 
         // Idle: waiting for the activation phrase is never a reason to touch
         // Bluetooth — always the phone microphone here, regardless of the
-        // configured MicrophoneSource.
+        // configured MicrophoneSource. The underlying AudioRecord/Recognizer
+        // session is left running quietly for as long as no wake phrase is
+        // heard (see VoskWakeWordDetector) — it must NOT restart on every
+        // out-of-grammar noise, or this phase would churn the mic/SCO as
+        // often as Continuous Mode does.
         val wakeAudioFlow = audioRecorder.start(allowBluetooth = false)
         val detected = wakeWordDetector.waitForWakeWord(wakeAudioFlow)
         audioRecorder.stop()
@@ -178,15 +189,19 @@ class VoiceEngine @Inject constructor(
         }
 
         DjLogger.voice("Wake word detected — opening dialog window")
+        feedbackManager.onActivation()
+        // Wake Word UX: hearing "Диджей" only opens the dialog window — it
+        // never itself executes a command.
         voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
         serviceStateHolder.updateMode(ServiceMode.Listening)
+        voiceOverlayController.show("🎧 DJ — Слушаю...")
 
         // Active: this is "recording a voice command" — the configured mic
         // source applies, opening Bluetooth SCO only if explicitly selected,
         // and only for the duration of this dialog window.
         val commandAudioFlow = audioRecorder.start(allowBluetooth = resolveAllowBluetooth())
         val windowMs = currentSettings.dialogWindowSeconds * 1000L
-        var lastActivityAt = SystemClock.elapsedRealtime()
+        var windowDeadline = SystemClock.elapsedRealtime() + windowMs
         var switchRequested = false
 
         coroutineScope {
@@ -196,21 +211,33 @@ class VoiceEngine @Inject constructor(
                     .collect { result ->
                         voiceStateHolder.setModelLoaded(true)
                         if (!result.isFinal || result.text.isBlank()) return@collect
-                        lastActivityAt = SystemClock.elapsedRealtime()
-                        val modeSwitch = handleRecognition(result)
-                        if (modeSwitch == VoiceListeningMode.CONTINUOUS) {
+                        val outcome = handleRecognition(result)
+                        if (outcome.extendWindow) {
+                            // Only a successfully executed command re-opens the
+                            // window — ambient noise or rejected/failed
+                            // recognitions must not keep the mic open forever.
+                            windowDeadline = SystemClock.elapsedRealtime() + windowMs
+                        }
+                        voiceOverlayController.updateStatus("🎧 DJ — Слушаю...")
+                        if (outcome.modeSwitch == VoiceListeningMode.CONTINUOUS) {
                             currentListeningMode = VoiceListeningMode.CONTINUOUS
                             switchRequested = true
                         }
                     }
             }
             while (collectJob.isActive) {
+                val secondsLeft = ((windowDeadline - SystemClock.elapsedRealtime()) / 1000L).toInt().coerceAtLeast(0)
+                voiceStateHolder.updateRemainingWindowSeconds(secondsLeft)
+                voiceOverlayController.updateCountdown(secondsLeft)
                 delay(300)
-                if (SystemClock.elapsedRealtime() - lastActivityAt > windowMs) {
+                if (SystemClock.elapsedRealtime() >= windowDeadline) {
                     collectJob.cancel()
                 }
             }
         }
+        voiceStateHolder.updateRemainingWindowSeconds(null)
+        voiceStateHolder.updateEngineState(VoiceEngineState.Sleep)
+        voiceOverlayController.hide()
         // "Disable SCO immediately after recognition finishes" — this ends
         // the dialog window's recording session (and any Bluetooth SCO it
         // opened) right away; the next loop iteration goes back to
@@ -228,8 +255,16 @@ class VoiceEngine @Inject constructor(
         }
     }
 
-    /** Returns the new listening mode if this recognition switched modes, else null. */
-    private suspend fun handleRecognition(result: RecognitionResult): VoiceListeningMode? {
+    /** Result of handling one recognized utterance during a dialog window. */
+    private data class RecognitionOutcome(
+        val modeSwitch: VoiceListeningMode?,
+        /** True only for a successfully executed command — noise/rejections/failures must not extend the dialog window. */
+        val extendWindow: Boolean
+    )
+
+    private suspend fun handleRecognition(result: RecognitionResult): RecognitionOutcome {
+        voiceStateHolder.updateEngineState(VoiceEngineState.Processing)
+        voiceOverlayController.updateStatus("🎧 DJ — Распознаю...")
         serviceStateHolder.updateMode(ServiceMode.Recognizing)
         val startTime = SystemClock.elapsedRealtime()
 
@@ -251,7 +286,7 @@ class VoiceEngine @Inject constructor(
                 rejectReason = "Low confidence (${formatPercent(confidence)} < ${formatPercent(threshold)})",
                 startTime = startTime
             )
-            return null
+            return RecognitionOutcome(modeSwitch = null, extendWindow = false)
         }
 
         if (intent is DjIntent.SetContinuousMode || intent is DjIntent.SetWakeMode) {
@@ -271,9 +306,11 @@ class VoiceEngine @Inject constructor(
                 rejectReason = null,
                 startTime = startTime
             )
-            return newMode
+            return RecognitionOutcome(modeSwitch = newMode, extendWindow = true)
         }
 
+        voiceStateHolder.updateEngineState(VoiceEngineState.Executing)
+        voiceOverlayController.updateStatus("🎧 DJ — Выполняю...")
         serviceStateHolder.updateMode(ServiceMode.Processing)
         val commandResult = commandDispatcher.dispatch(intent, rawText)
 
@@ -288,7 +325,9 @@ class VoiceEngine @Inject constructor(
             startTime = startTime
         )
         serviceStateHolder.updateLastRecognizedText(rawText)
-        return null
+        val succeeded = commandResult is CommandResult.Success || commandResult is CommandResult.SuccessWithInfo
+        voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
+        return RecognitionOutcome(modeSwitch = null, extendWindow = succeeded)
     }
 
     private fun recordAndFinish(

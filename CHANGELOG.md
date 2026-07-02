@@ -6,6 +6,65 @@
 
 ---
 
+## [0.3.3] — 2026-07-01 — Sprint 3.2: Voice UX Polish
+
+Полировка голосового UX по итогам ручного тестирования на устройстве:
+исправлен корневой баг, из-за которого Wake Mode ощущалось как Continuous
+Mode, добавлены визуальная/звуковая обратная связь и честный таймер
+диалогового окна.
+
+**Исправлено:**
+- **Корневая причина "Wake Mode ощущается как Continuous Mode".**
+  `VoskWakeWordDetector.waitForWakeWord()` завершал ожидание по любому
+  финальному результату Vosk (`.first { it.isFinal && it.text.isNotBlank() }`),
+  а в Grammar Mode любая речь/шум вне словаря wake-фраз возвращается как
+  непустая строка `"[unk]"` — почти любой звук завершал ожидание с
+  `detected = false`, заставляя `VoiceEngine` пересоздавать всю сессию
+  (новый `AudioRecord`/`Recognizer`, при выборе Bluetooth — новый SCO
+  хендшейк) практически непрерывно. Предикат сужен до совпадения с
+  реальной wake-фразой; `"[unk]"`/пустые финалы больше не прерывают сессию.
+- Таймер диалогового окна раньше продлевался на любой финальный результат
+  (включая `[unk]`-шум и отклонённые/неудавшиеся команды) — теперь
+  продлевается только после успешно выполненной команды.
+
+**Добавлено:**
+- `VoiceOverlayController` (`service/overlay`) — компактный несблокирующий
+  floating-оверлей ("🎧 DJ — Слушаю... Ns") на чистых Android View +
+  `WindowManager` (без Compose — `:service` остаётся Compose-free);
+  fade/scale-появление с `OvershootInterpolator`, пульсирующий индикатор
+  через `ValueAnimator`. Появляется сразу после wake word, исчезает по
+  завершении диалогового окна или при остановке `VoiceEngine`.
+- `OverlayAccess` helper (`ui/permissions`) + карточка в `SettingsScreen`
+  для выдачи `SYSTEM_ALERT_WINDOW` («Draw over other apps»).
+- `FeedbackManager.onActivation()` теперь реально вызывается в момент
+  обнаружения wake word — короткий сигнал активации звучит (успех/ошибка
+  уже были подключены через `CommandDispatcher`).
+- Настройка «Звуковые сигналы» (`DjSettings.soundFeedbackEnabled`,
+  по умолчанию включена) — `BeepFeedbackManager` теперь проверяет её перед
+  каждым сигналом.
+- `VoiceStateHolder.remainingWindowSeconds: StateFlow<Int?>` — обратный
+  отсчёт диалогового окна, показывается на Debug Screen и в оверлее.
+
+**Изменено:**
+- `VoiceEngineState` расширен: `Idle, Initializing, WaitingWakeWord,
+  Listening, Processing, Executing, Sleep, Error` (было 4 значения) —
+  отражает полный жизненный цикл распознавания и виден на Debug Screen.
+- `VoiceEngine.handleRecognition()` теперь возвращает
+  `RecognitionOutcome(modeSwitch, extendWindow)` вместо голого
+  `VoiceListeningMode?`, чтобы явно разделить «переключение режима» и
+  «нужно ли продлевать окно».
+
+**Ограничения:**
+- Нет Android SDK/устройства/Bluetooth-гарнитуры в среде сборки — сборка
+  (`./gradlew :service:compileDebugKotlin`) падает с `SDK location not
+  found`; изменения проверены только чтением и трассировкой кода, не
+  компиляцией. Финальная проверка на устройстве — за пользователем.
+- Анимации оверлея — стандартные `View.animate()`/`ValueAnimator`, без
+  `androidx.dynamicanimation`-пружин и без `RenderEffect`-блюра (API 31+):
+  не требовалось для выполнения десяти пунктов задания буквально.
+
+---
+
 ## [0.3.2] — 2026-07-01 — Sprint 3.1.1: Bluetooth SCO lifecycle redesign
 
 Редизайн обработки Bluetooth-микрофона по итогам ревью: первая версия

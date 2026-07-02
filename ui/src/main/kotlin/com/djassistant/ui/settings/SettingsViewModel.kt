@@ -44,4 +44,8 @@ class SettingsViewModel @Inject constructor(
     fun setMicrophoneSource(source: MicrophoneSource) {
         viewModelScope.launch { settingsRepository.setMicrophoneSource(source) }
     }
+
+    fun setSoundFeedbackEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setSoundFeedbackEnabled(enabled) }
+    }
 }

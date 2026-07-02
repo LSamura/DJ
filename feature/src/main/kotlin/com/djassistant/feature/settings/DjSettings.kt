@@ -12,5 +12,7 @@ data class DjSettings(
     /** How long (seconds) the dialog window stays open after wake-word activation. Range 3-15. */
     val dialogWindowSeconds: Int = 6,
     /** AUTO/PHONE never touch Bluetooth SCO; only BLUETOOTH opts in. */
-    val microphoneSource: MicrophoneSource = MicrophoneSource.AUTO
+    val microphoneSource: MicrophoneSource = MicrophoneSource.AUTO,
+    /** Short activation/success/error beeps; can be muted entirely. */
+    val soundFeedbackEnabled: Boolean = true
 )

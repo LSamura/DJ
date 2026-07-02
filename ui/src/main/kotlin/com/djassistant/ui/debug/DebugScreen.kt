@@ -79,6 +79,7 @@ fun DebugScreen(
     val voiceLastRejectReason by viewModel.voiceLastRejectReason.collectAsStateWithLifecycle()
     val voiceLastProcessingTimeMs by viewModel.voiceLastProcessingTimeMs.collectAsStateWithLifecycle()
     val voiceRecentCommands by viewModel.voiceRecentCommands.collectAsStateWithLifecycle()
+    val voiceRemainingWindowSeconds by viewModel.voiceRemainingWindowSeconds.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
@@ -174,6 +175,9 @@ fun DebugScreen(
             DebugSection("Voice") {
                 DebugRow("Voice Service") { DebugValue(voiceEngineState.displayName()) }
                 DebugRow("Режим") { DebugValue(settings.listeningMode.displayName()) }
+                voiceRemainingWindowSeconds?.let { seconds ->
+                    DebugRow("Окно диалога") { DebugValue("${seconds}s") }
+                }
                 DebugRow("Vosk") { DebugValue(if (voiceModelLoaded) "Модель загружена" else "Модель не загружена") }
                 DebugRow("Raw Text") { DebugValue(voiceLastRawText.ifBlank { "—" }) }
                 DebugRow("Normalized Text") { DebugValue(voiceLastNormalizedText.ifBlank { "—" }) }

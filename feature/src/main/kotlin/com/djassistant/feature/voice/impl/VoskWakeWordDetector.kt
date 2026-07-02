@@ -25,14 +25,18 @@ class VoskWakeWordDetector @Inject constructor(
     override suspend fun waitForWakeWord(audioFlow: Flow<ByteArray>): Boolean {
         DjLogger.voice("Listening for wake word...")
         val result = try {
+            // Vosk's Grammar Mode reports any out-of-vocabulary speech/noise as the
+            // literal, non-blank text "[unk]". Only a genuine wake-phrase match may
+            // end the wait — otherwise ambient noise would end the session almost
+            // immediately and force the caller into a constant restart loop, which
+            // is what made Wake Mode feel like Continuous Mode in practice.
             speechRecognizer.startListening(audioFlow, vocabulary = WAKE_PHRASES)
-                .first { it.isFinal && it.text.isNotBlank() }
+                .first { it.isFinal && WAKE_PHRASES.any { phrase -> it.text.contains(phrase) } }
         } catch (e: NoSuchElementException) {
             // Audio flow ended without a match (e.g. engine stopping).
             return false
         }
-        val detected = WAKE_PHRASES.any { result.text.contains(it) }
-        if (detected) DjLogger.voice("Wake word detected: \"${result.text}\"")
-        return detected
+        DjLogger.voice("Wake word detected: \"${result.text}\"")
+        return true
     }
 }

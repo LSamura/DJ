@@ -324,4 +324,26 @@ core → []
 
 **Причина:** Прямые требования: «Do not keep Bluetooth SCO permanently active», «Only enable SCO immediately before recording a voice command», «Disable SCO immediately after recognition finishes», «Restore A2DP playback as quickly as possible», «The Voice Service must never keep Bluetooth headphones in call mode while idle». Привязка SCO к жизненному циклу конкретной сессии записи (а не к жизненному циклу всего движка) — единственный способ буквально выполнить все пять требований одновременно.
 
+---
+
+## ADR-032 | 2026-07-01
+### `VoskWakeWordDetector` — предикат ожидания должен матчить только реальную wake-фразу, не любой непустой финальный результат
+
+**Проблема:** Несмотря на архитектурное разделение сессий записи (ADR-031), пользователь на реальном устройстве по-прежнему наблюдал, что Wake Mode «ощущается как Continuous Mode», а Bluetooth-качество деградирует. Трассировка кода показала: `waitForWakeWord()` завершал `Flow.first { it.isFinal && it.text.isNotBlank() }` на ЛЮБОМ финальном результате Vosk. В Grammar Mode (используется здесь намеренно — маленький словарь дешевле полного) Vosk возвращает буквальную непустую строку `"[unk]"` для любой речи/шума вне заданного словаря. Значит, почти любой звук завершал ожидание с `detected = false`, и `VoiceEngine.runWakeWordSession()` тут же пересоздавал сессию (новый `AudioRecord`, новый `Recognizer`, в Wake Mode — с новым Bluetooth SCO хендшейком, если выбран Bluetooth) — цикл перезапусков, а не «движок никогда не спит».
+
+**Решение:** Предикат сужен до `.first { it.isFinal && WAKE_PHRASES.any { phrase -> it.text.contains(phrase) } }`. Теперь `"[unk]"` и пустые финальные результаты не завершают ожидание — `AudioRecord`/`Recognizer` остаются открытыми и тихо ждут, пока не прозвучит реальная wake-фраза. Это не проверка присутствия речи, а условие завершения flow — не нужно менять ни `AudioRecorder`, ни `SpeechRecognizer`, только предикат в `WakeWordDetector`-реализации, за интерфейсом, который для этого и существует.
+
+**Причина:** Пользователь потребовал буквально: «Проверить это по коду. Если текущая реализация действительно держит VoiceEngine активным постоянно — исправить». Ошибка была не в том, что движок «никогда не спит» в смысле не освобождает ресурсы (ADR-031 это гарантирует), а в том, что сессия ожидания слишком часто и без пользы пересоздавалась — с точки зрения пользователя оба симптома неотличимы («звучит как будто всегда слушает»).
+
+---
+
+## ADR-033 | 2026-07-01
+### Оверлей Listening-режима — чистые Android View + WindowManager, не Compose
+
+**Решение:** `VoiceOverlayController` (`service/overlay`) реализован на обычных `View`/`LinearLayout`/`TextView`, программно создаваемых в коде, и добавляется в `WindowManager` как `TYPE_APPLICATION_OVERLAY`-окно с флагами `FLAG_NOT_TOUCHABLE | FLAG_NOT_FOCUSABLE | FLAG_LAYOUT_NO_LIMITS`. Анимации — стандартные `View.animate()` (fade/scale, `OvershootInterpolator`) и `ValueAnimator` (пульсация индикатора), без `androidx.dynamicanimation` и без Compose.
+
+**Причина:** Архитектурная граница проекта: Compose используется только в `:ui`; `:service` намеренно остаётся Compose-free (см. существующую документацию модулей). Оверлей — это floating-окно поверх ВСЕХ приложений, а не часть Activity/Compose-дерева самого DJ Assistant, так что привязывать его к Compose не было бы естественно даже без этого ограничения. `SYSTEM_ALERT_WINDOW` — специальное разрешение (не runtime-permission), поэтому добавлен `OverlayAccess` helper в `ui/permissions` по образцу уже существующего `NotificationAccess`, и карточка в `SettingsScreen` для его выдачи.
+
+**Ограничение:** Не проверено на реальном устройстве (нет Android SDK/дисплея в этой среде) — визуальный вид, плавность анимаций и корректность работы `WindowManager`-флагов должны быть подтверждены пользователем.
+
 **Ограничение:** в Continuous Mode с явно выбранным `BLUETOOTH` SCO неизбежно остаётся активным на всё время сессии — этот режим по определению не имеет состояния простоя (движок всегда что-то распознаёт). Это осознанный компромисс, а не недосмотр: пользователь явно выбирает Bluetooth, зная о continuous-семантике.

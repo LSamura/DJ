@@ -12,4 +12,5 @@ interface SettingsRepository {
     suspend fun setListeningMode(mode: VoiceListeningMode)
     suspend fun setDialogWindowSeconds(seconds: Int)
     suspend fun setMicrophoneSource(source: MicrophoneSource)
+    suspend fun setSoundFeedbackEnabled(enabled: Boolean)
 }

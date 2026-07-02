@@ -55,6 +55,7 @@ class DebugViewModel @Inject constructor(
     val voiceLastRejectReason: StateFlow<String?> = voiceStateHolder.lastRejectReason
     val voiceLastProcessingTimeMs: StateFlow<Long?> = voiceStateHolder.lastProcessingTimeMs
     val voiceRecentCommands: StateFlow<List<VoiceCommandLogEntry>> = voiceStateHolder.recentCommands
+    val voiceRemainingWindowSeconds: StateFlow<Int?> = voiceStateHolder.remainingWindowSeconds
 
     val settings: StateFlow<DjSettings> = settingsRepository.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DjSettings())

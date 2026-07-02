@@ -19,8 +19,12 @@ private const val MAX_LOG_ENTRIES = 10
 @Singleton
 class VoiceStateHolder @Inject constructor() {
 
-    private val _engineState = MutableStateFlow<VoiceEngineState>(VoiceEngineState.Stopped)
+    private val _engineState = MutableStateFlow<VoiceEngineState>(VoiceEngineState.Idle)
     val engineState: StateFlow<VoiceEngineState> = _engineState.asStateFlow()
+
+    /** Seconds left in the current dialog window, or null when no window is open (Continuous/Wake-wait). */
+    private val _remainingWindowSeconds = MutableStateFlow<Int?>(null)
+    val remainingWindowSeconds: StateFlow<Int?> = _remainingWindowSeconds.asStateFlow()
 
     private val _modelLoaded = MutableStateFlow(false)
     val modelLoaded: StateFlow<Boolean> = _modelLoaded.asStateFlow()
@@ -54,6 +58,10 @@ class VoiceStateHolder @Inject constructor() {
 
     fun updateEngineState(state: VoiceEngineState) {
         _engineState.value = state
+    }
+
+    fun updateRemainingWindowSeconds(seconds: Int?) {
+        _remainingWindowSeconds.value = seconds
     }
 
     fun setModelLoaded(loaded: Boolean) {

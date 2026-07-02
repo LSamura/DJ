@@ -33,6 +33,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val LISTENING_MODE = stringPreferencesKey("listening_mode")
         val DIALOG_WINDOW_SECONDS = intPreferencesKey("dialog_window_seconds")
         val MICROPHONE_SOURCE = stringPreferencesKey("microphone_source")
+        val SOUND_FEEDBACK_ENABLED = booleanPreferencesKey("sound_feedback_enabled")
     }
 
     override val settings: Flow<DjSettings> = context.dataStore.data.map { prefs ->
@@ -46,7 +47,8 @@ class DataStoreSettingsRepository @Inject constructor(
             dialogWindowSeconds = prefs[Keys.DIALOG_WINDOW_SECONDS] ?: 6,
             microphoneSource = prefs[Keys.MICROPHONE_SOURCE]?.let { raw ->
                 runCatching { MicrophoneSource.valueOf(raw) }.getOrNull()
-            } ?: MicrophoneSource.AUTO
+            } ?: MicrophoneSource.AUTO,
+            soundFeedbackEnabled = prefs[Keys.SOUND_FEEDBACK_ENABLED] ?: true
         )
     }
 
@@ -72,5 +74,9 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setMicrophoneSource(source: MicrophoneSource) {
         context.dataStore.edit { it[Keys.MICROPHONE_SOURCE] = source.name }
+    }
+
+    override suspend fun setSoundFeedbackEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SOUND_FEEDBACK_ENABLED] = enabled }
     }
 }
