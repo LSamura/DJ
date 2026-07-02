@@ -13,6 +13,7 @@ import com.djassistant.feature.settings.DjSettings
 import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
+import com.djassistant.feature.voice.WakeWordPhrases
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,6 +35,8 @@ class DataStoreSettingsRepository @Inject constructor(
         val DIALOG_WINDOW_SECONDS = intPreferencesKey("dialog_window_seconds")
         val MICROPHONE_SOURCE = stringPreferencesKey("microphone_source")
         val SOUND_FEEDBACK_ENABLED = booleanPreferencesKey("sound_feedback_enabled")
+        val WAKE_WORD_PHRASE_ID = stringPreferencesKey("wake_word_phrase_id")
+        val PORCUPINE_ACCESS_KEY = stringPreferencesKey("porcupine_access_key")
     }
 
     override val settings: Flow<DjSettings> = context.dataStore.data.map { prefs ->
@@ -48,7 +51,9 @@ class DataStoreSettingsRepository @Inject constructor(
             microphoneSource = prefs[Keys.MICROPHONE_SOURCE]?.let { raw ->
                 runCatching { MicrophoneSource.valueOf(raw) }.getOrNull()
             } ?: MicrophoneSource.AUTO,
-            soundFeedbackEnabled = prefs[Keys.SOUND_FEEDBACK_ENABLED] ?: true
+            soundFeedbackEnabled = prefs[Keys.SOUND_FEEDBACK_ENABLED] ?: true,
+            wakeWordPhraseId = prefs[Keys.WAKE_WORD_PHRASE_ID] ?: WakeWordPhrases.DEFAULT.id,
+            porcupineAccessKey = prefs[Keys.PORCUPINE_ACCESS_KEY] ?: ""
         )
     }
 
@@ -78,5 +83,13 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setSoundFeedbackEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.SOUND_FEEDBACK_ENABLED] = enabled }
+    }
+
+    override suspend fun setWakeWordPhraseId(id: String) {
+        context.dataStore.edit { it[Keys.WAKE_WORD_PHRASE_ID] = id }
+    }
+
+    override suspend fun setPorcupineAccessKey(key: String) {
+        context.dataStore.edit { it[Keys.PORCUPINE_ACCESS_KEY] = key.trim() }
     }
 }

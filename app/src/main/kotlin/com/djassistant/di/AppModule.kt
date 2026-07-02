@@ -27,10 +27,10 @@ import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.settings.impl.DataStoreSettingsRepository
 import com.djassistant.feature.voice.AudioRecorder
 import com.djassistant.feature.voice.SpeechRecognizer
-import com.djassistant.feature.voice.WakeWordDetector
+import com.djassistant.feature.voice.WakeWordEngine
 import com.djassistant.feature.voice.impl.AndroidAudioRecorder
+import com.djassistant.feature.voice.impl.PorcupineWakeWordEngine
 import com.djassistant.feature.voice.impl.VoskSpeechRecognizer
-import com.djassistant.feature.voice.impl.VoskWakeWordDetector
 import com.djassistant.service.DjServiceController
 import com.djassistant.service.ServiceController
 import dagger.Binds
@@ -66,7 +66,7 @@ abstract class AppModule {
     abstract fun bindSpeechRecognizer(impl: VoskSpeechRecognizer): SpeechRecognizer
 
     @Binds @Singleton
-    abstract fun bindWakeWordDetector(impl: VoskWakeWordDetector): WakeWordDetector
+    abstract fun bindWakeWordEngine(impl: PorcupineWakeWordEngine): WakeWordEngine
 
     @Binds @Singleton
     abstract fun bindUnknownCommandLogger(impl: CsvUnknownCommandLogger): UnknownCommandLogger

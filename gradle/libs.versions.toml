@@ -19,6 +19,7 @@ activityCompose = "1.9.2"
 timber = "5.0.1"
 vosk = "0.3.47"
 jna = "5.13.0"
+porcupine = "3.0.2"
 
 [libraries]
 # Android core
@@ -60,6 +61,9 @@ timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "tim
 # Offline speech recognition
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+
+# Offline wake word detection (Sprint 4)
+porcupine-android = { group = "ai.picovoice", name = "porcupine-android", version.ref = "porcupine" }
 
 [bundles]
 compose = [

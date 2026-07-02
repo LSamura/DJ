@@ -20,7 +20,7 @@ import com.djassistant.feature.voice.RecognitionResult
 import com.djassistant.feature.voice.SpeechRecognizer
 import com.djassistant.feature.voice.TextNormalizer
 import com.djassistant.feature.voice.VoiceListeningMode
-import com.djassistant.feature.voice.WakeWordDetector
+import com.djassistant.feature.voice.WakeWordEngine
 import com.djassistant.service.ServiceMode
 import com.djassistant.service.ServiceStateHolder
 import com.djassistant.service.overlay.VoiceOverlayController
@@ -53,13 +53,17 @@ import kotlinx.coroutines.launch
  * scope so neither audio capture nor Vosk's blocking native calls ever
  * touch the main thread.
  *
- * Supports two listening modes (Sprint 3.1):
- *  - [VoiceListeningMode.CONTINUOUS] — full command grammar always running
- *    (Sprint 3 behavior).
- *  - [VoiceListeningMode.WAKE_WORD] — a cheap [WakeWordDetector] listens for
- *    the activation phrase; once triggered, full command recognition opens
- *    for a configurable dialog window and resets on every recognized
- *    utterance, then falls back to wake-word listening.
+ * Supports two listening modes:
+ *  - [VoiceListeningMode.CONTINUOUS] — full Vosk command grammar always
+ *    running (Sprint 3 behavior, unchanged since).
+ *  - [VoiceListeningMode.WAKE_WORD] — a dedicated [WakeWordEngine]
+ *    (Porcupine, Sprint 4) listens for the activation phrase using its own
+ *    lightweight detector, never Vosk; once triggered, Vosk is started
+ *    just for a configurable Listening Window, resets on every
+ *    successfully executed command, then Vosk is torn down again and
+ *    control returns to [WakeWordEngine]. See ADR-037 in DECISIONS.md for
+ *    why wake-word spotting and command recognition are two different
+ *    engines rather than one doing both.
  *
  * Mode-switch intents (SetContinuousMode/SetWakeMode) are handled here and
  * never reach [CommandDispatcher] — they are a Voice Layer concern, not a
@@ -78,7 +82,7 @@ class VoiceEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val audioRecorder: AudioRecorder,
     private val speechRecognizer: SpeechRecognizer,
-    private val wakeWordDetector: WakeWordDetector,
+    private val wakeWordEngine: WakeWordEngine,
     private val intentRecognizer: IntentRecognizer,
     private val commandDispatcher: CommandDispatcher,
     private val settingsRepository: SettingsRepository,
@@ -119,6 +123,7 @@ class VoiceEngine @Inject constructor(
         job = null
         audioRecorder.stop()
         speechRecognizer.release()
+        wakeWordEngine.release()
         voiceOverlayController.hideImmediately()
         voiceStateHolder.setModelLoaded(false)
         voiceStateHolder.updateRemainingWindowSeconds(null)
@@ -212,19 +217,23 @@ class VoiceEngine @Inject constructor(
 
         // Idle: waiting for the activation phrase is never a reason to touch
         // Bluetooth — always the phone microphone here, regardless of the
-        // configured MicrophoneSource. The underlying AudioRecord/Recognizer
-        // session is left running quietly for as long as no wake phrase is
-        // heard (see VoskWakeWordDetector) — it must NOT restart on every
-        // out-of-grammar noise, or this phase would churn the mic/SCO as
-        // often as Continuous Mode does.
+        // configured MicrophoneSource. Porcupine (see PorcupineWakeWordEngine)
+        // is cheap enough to keep this AudioRecord/detector session open for
+        // as long as it takes to hear the wake phrase — unlike the old
+        // Vosk-grammar approach, there is no restart-on-noise churn here at
+        // all, so this phase never needs to cycle the mic/SCO like
+        // Continuous Mode does.
         val wakeAudioFlow = audioRecorder.start(allowBluetooth = false)
         currentStage = "wake_word_detection"
-        val detected = wakeWordDetector.waitForWakeWord(wakeAudioFlow)
+        val detected = wakeWordEngine.waitForWakeWord(wakeAudioFlow)
         audioRecorder.stop()
 
         if (!detected) {
-            reportIfModelMissing()
-            if (!speechRecognizer.isReady) delay(2_000)
+            if (!wakeWordEngine.isReady) {
+                DjLogger.voiceError("WakeWordEngine не готов (см. настройки Wake Word) — повтор через 2с")
+                voiceStateHolder.updateEngineState(VoiceEngineState.Error("Wake Word движок не настроен"))
+                delay(2_000)
+            }
             return
         }
 

@@ -34,7 +34,7 @@ class VoskSpeechRecognizer @Inject constructor(
     override val isReady: Boolean
         get() = model != null
 
-    override fun startListening(audioFlow: Flow<ByteArray>, vocabulary: List<String>?): Flow<RecognitionResult> = flow {
+    override fun startListening(audioFlow: Flow<ByteArray>): Flow<RecognitionResult> = flow {
         val modelDir = modelProvisioner.ensureModel()
         if (modelDir == null) {
             DjLogger.voiceError("Vosk model not available — see VoskModelProvisioner")
@@ -48,7 +48,7 @@ class VoskSpeechRecognizer @Inject constructor(
             return@flow
         }
 
-        val grammar = vocabulary?.let(::buildGrammarJson) ?: grammarBuilder.build()
+        val grammar = grammarBuilder.build()
         val recognizer = try {
             Recognizer(loadedModel, SAMPLE_RATE_HZ, grammar).apply { setWords(true) }
         } catch (e: Exception) {
@@ -56,7 +56,7 @@ class VoskSpeechRecognizer @Inject constructor(
             return@flow
         }
 
-        DjLogger.voice("Vosk recognizer ready (${if (vocabulary != null) "wake-word grammar" else "command grammar"})")
+        DjLogger.voice("Vosk recognizer ready (command grammar)")
         try {
             audioFlow.collect { chunk ->
                 val isFinal = recognizer.acceptWaveForm(chunk, chunk.size)
@@ -72,11 +72,6 @@ class VoskSpeechRecognizer @Inject constructor(
         DjLogger.voice("VoskSpeechRecognizer.release()")
         runCatching { model?.close() }
         model = null
-    }
-
-    private fun buildGrammarJson(phrases: List<String>): String {
-        val items = (phrases + "[unk]").joinToString(",") { "\"$it\"" }
-        return "[$items]"
     }
 
     private fun parseRecognitionResult(json: String, isFinal: Boolean): RecognitionResult? = runCatching {

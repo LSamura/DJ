@@ -6,11 +6,12 @@ interface SpeechRecognizer {
     val isReady: Boolean
 
     /**
-     * @param vocabulary Optional restricted word list (Grammar Mode) to use
-     * instead of the default full command grammar — e.g. a wake-word-only
-     * vocabulary, much cheaper to run continuously than full command
-     * recognition (see [WakeWordDetector]). Null uses the default grammar.
+     * Recognizes command speech using the full command grammar built from
+     * `commands.json` (see [GrammarBuilder]). Sprint 4: wake-word spotting
+     * moved to a dedicated [WakeWordEngine] (Porcupine), so this is now the
+     * only grammar Vosk ever runs — there is no restricted-vocabulary mode
+     * to select here anymore.
      */
-    fun startListening(audioFlow: Flow<ByteArray>, vocabulary: List<String>? = null): Flow<RecognitionResult>
+    fun startListening(audioFlow: Flow<ByteArray>): Flow<RecognitionResult>
     fun release()
 }

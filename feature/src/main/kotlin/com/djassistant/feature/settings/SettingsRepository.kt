@@ -13,4 +13,6 @@ interface SettingsRepository {
     suspend fun setDialogWindowSeconds(seconds: Int)
     suspend fun setMicrophoneSource(source: MicrophoneSource)
     suspend fun setSoundFeedbackEnabled(enabled: Boolean)
+    suspend fun setWakeWordPhraseId(id: String)
+    suspend fun setPorcupineAccessKey(key: String)
 }

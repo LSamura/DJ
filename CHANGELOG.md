@@ -6,6 +6,78 @@
 
 ---
 
+## [0.4.0] — 2026-07-01 — Sprint 4: Dedicated Wake Word Engine (Porcupine)
+
+Wake Mode's wake-word spotting moves off Vosk entirely and onto a
+dedicated engine (Picovoice Porcupine). Vosk is NOT removed — it remains
+the only engine ever used to recognize actual voice commands, in both
+Continuous Mode and inside a Wake Mode Listening Window — it just never
+runs anymore purely to listen for "Диджей".
+
+**Added:**
+- `WakeWordEngine` (`feature/voice`) — new abstraction replacing Sprint
+  3.1's `WakeWordDetector`. `VoiceEngine` depends only on the interface.
+- `PorcupineWakeWordEngine` — real implementation: buffers the
+  `AudioRecorder` byte stream into fixed-length frames
+  (`Porcupine.frameLength`), feeds them to `porcupine.process()`; creates
+  and `.delete()`s a native `Porcupine` instance per wake-wait session
+  (same per-phase lifecycle already used for `AudioRecorder` sessions and
+  the overlay).
+- `MockWakeWordEngine` — test double, detects only via an explicit
+  `triggerDetection()` call; not bound in `AppModule`, proves `VoiceEngine`
+  isn't coupled to any specific engine.
+- `PorcupineAssetProvisioner` — copies `.ppn`/`.pv` files from assets into
+  internal storage (same pattern as `VoskModelProvisioner`).
+- `WakeWordPhrase` / `WakeWordPhrases` — extensible registry of activation
+  phrases instead of a hardcoded "Диджей" string. Only one phrase ships
+  today, but adding "Музыка", "Ассистент", or a custom phrase later is one
+  new registry entry plus its trained assets — no `VoiceEngine` changes.
+- Settings: Wake Word phrase picker (chips, one option for now) + a
+  Porcupine Access Key field (`DjSettings.wakeWordPhraseId`,
+  `porcupineAccessKey`, persisted via DataStore).
+- `feature/src/main/assets/porcupine/README.md` — exact steps to obtain
+  the trained keyword file and language model needed to actually run this
+  on-device.
+
+**Changed:**
+- `VoiceEngine.runWakeWordSession()` now calls `wakeWordEngine.waitForWakeWord()`
+  instead of the old Vosk-grammar detector; everything else in the Wake
+  Mode dialog window (beep, overlay, Listening Window, extend-on-success,
+  Vosk teardown, return to idle) is unchanged from Sprint 3.2/3.3 — it was
+  already structured to make this swap a one-line change.
+- `SpeechRecognizer.startListening()` dropped the `vocabulary: List<String>?`
+  parameter — it existed only for the old wake-word grammar and had no
+  remaining callers; `VoskSpeechRecognizer` always builds the full command
+  grammar now.
+- `AppModule` binds `WakeWordEngine` to `PorcupineWakeWordEngine`.
+
+**Removed:**
+- `feature/voice/WakeWordDetector.kt`, `feature/voice/impl/VoskWakeWordDetector.kt`
+  — Vosk no longer ever does wake-word spotting.
+
+**Unaffected by design:**
+- Continuous Mode — no file touched by `runContinuousSession()` changed.
+- Bluetooth SCO lifecycle — unchanged from Sprint 3.1.1/3.3; only the idle
+  detector changed, not when/how SCO opens or closes.
+
+**Limitations:**
+- Porcupine requires a personal Access Key and a keyword file (`.ppn`)
+  trained specifically for "Диджей" in Russian — neither ships in this
+  repo nor can be generated offline (one-time setup via
+  console.picovoice.ai, same category of manual step the original Vosk
+  model needed). Until configured, `PorcupineWakeWordEngine.isReady ==
+  false`, the error is logged and visible on Debug Screen, and the app
+  does not crash — but Wake Mode won't detect anything.
+- No Android SDK/device in this sandbox — the Porcupine Android SDK
+  integration (`Porcupine.Builder`, `setKeywordPaths`, `setModelPath`,
+  `.process(ShortArray)`, `.frameLength`, `.delete()`) is written from
+  recollection of the library's public API, not verified by compiling.
+- As with every Voice Layer sprint since 3.1, final on-device verification
+  (including whether the exact Porcupine API used here compiles against
+  the pinned `3.0.2` version) is the user's responsibility.
+
+---
+
 ## [0.3.4] — 2026-07-01 — Sprint 3.3: Stabilization
 
 Sprint 3.2 не был принят пользователем после теста на реальном устройстве:

@@ -48,4 +48,12 @@ class SettingsViewModel @Inject constructor(
     fun setSoundFeedbackEnabled(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setSoundFeedbackEnabled(enabled) }
     }
+
+    fun setWakeWordPhraseId(id: String) {
+        viewModelScope.launch { settingsRepository.setWakeWordPhraseId(id) }
+    }
+
+    fun setPorcupineAccessKey(key: String) {
+        viewModelScope.launch { settingsRepository.setPorcupineAccessKey(key) }
+    }
 }

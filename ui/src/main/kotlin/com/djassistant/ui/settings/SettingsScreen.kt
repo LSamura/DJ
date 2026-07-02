@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -39,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -47,6 +49,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
+import com.djassistant.feature.voice.WakeWordPhrases
 import com.djassistant.ui.permissions.NotificationAccess
 import com.djassistant.ui.permissions.OverlayAccess
 import com.djassistant.ui.theme.StatusRunning
@@ -329,6 +332,65 @@ fun SettingsScreen(
                     onClick = { viewModel.setMicrophoneSource(MicrophoneSource.BLUETOOTH) },
                     label = { Text("Bluetooth") }
                 )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            ListItem(
+                headlineContent = { Text("Wake Word") },
+                supportingContent = {
+                    Text(
+                        "Активационная фраза для Wake Mode (движок — Porcupine). " +
+                            "Список расширяемый — пока доступна только одна фраза."
+                    )
+                }
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                WakeWordPhrases.ALL.forEach { phrase ->
+                    FilterChip(
+                        selected = settings.wakeWordPhraseId == phrase.id,
+                        onClick = { viewModel.setWakeWordPhraseId(phrase.id) },
+                        label = { Text(phrase.displayName) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            var accessKeyValue by remember(settings.porcupineAccessKey) {
+                mutableStateOf(settings.porcupineAccessKey)
+            }
+            OutlinedTextField(
+                value = accessKeyValue,
+                onValueChange = { accessKeyValue = it },
+                label = { Text("Porcupine Access Key") },
+                supportingText = {
+                    Text(
+                        "Бесплатный ключ на console.picovoice.ai. Без него и без " +
+                            "обученного файла ключевого слова Wake Mode не сможет " +
+                            "услышать активацию — см. PROJECT_STATE.md."
+                    )
+                },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(onClick = { viewModel.setPorcupineAccessKey(accessKeyValue) }) {
+                    Text("Сохранить ключ")
+                }
             }
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
