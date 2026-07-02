@@ -27,6 +27,8 @@ import com.djassistant.service.overlay.VoiceOverlayController
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -86,11 +88,22 @@ class VoiceEngine @Inject constructor(
     private val voiceOverlayController: VoiceOverlayController
 ) {
 
-    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Last-resort safety net: if a bug slips past the per-stage try/catch below
+    // (e.g. in the settings collector child coroutine), this stops it from
+    // crashing the whole app with an uncaught exception — it gets logged and
+    // surfaced as an Error engine state instead.
+    private val engineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
+            stageError(throwable)
+        }
+    )
     private var job: Job? = null
 
     @Volatile private var currentSettings = DjSettings()
     @Volatile private var currentListeningMode = VoiceListeningMode.CONTINUOUS
+
+    /** Human-readable marker of the last stage entered — used to tag errors so Debug Screen shows *where* things broke. */
+    @Volatile private var currentStage: String = "idle"
 
     fun start() {
         if (job?.isActive == true) {
@@ -106,13 +119,14 @@ class VoiceEngine @Inject constructor(
         job = null
         audioRecorder.stop()
         speechRecognizer.release()
-        voiceOverlayController.hide()
+        voiceOverlayController.hideImmediately()
         voiceStateHolder.setModelLoaded(false)
         voiceStateHolder.updateRemainingWindowSeconds(null)
         voiceStateHolder.updateEngineState(VoiceEngineState.Idle)
     }
 
     private suspend fun runPipeline() {
+        currentStage = "initializing"
         voiceStateHolder.updateEngineState(VoiceEngineState.Initializing)
 
         if (!hasRecordAudioPermission()) {
@@ -128,11 +142,34 @@ class VoiceEngine @Inject constructor(
         }
 
         while (engineScope.isActive) {
-            when (currentListeningMode) {
-                VoiceListeningMode.CONTINUOUS -> runContinuousSession()
-                VoiceListeningMode.WAKE_WORD -> runWakeWordSession()
+            try {
+                when (currentListeningMode) {
+                    VoiceListeningMode.CONTINUOUS -> runContinuousSession()
+                    VoiceListeningMode.WAKE_WORD -> runWakeWordSession()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A failure at any stage must never crash the whole app — log
+                // it with the stage it happened at, force every resource this
+                // engine could be holding closed, and go around the loop
+                // again instead of propagating.
+                stageError(e)
+                runCatching { audioRecorder.stop() }
+                runCatching { voiceOverlayController.hideImmediately() }
+                voiceStateHolder.updateRemainingWindowSeconds(null)
+                delay(1_000)
             }
         }
+    }
+
+    /** Logs an exception tagged with [currentStage] and surfaces it as an Error engine state, visible on Debug Screen. */
+    private fun stageError(throwable: Throwable) {
+        val stage = currentStage
+        DjLogger.voiceError("Ошибка на этапе '$stage'", throwable)
+        voiceStateHolder.updateEngineState(
+            VoiceEngineState.Error("[$stage] ${throwable.message ?: throwable::class.simpleName}")
+        )
     }
 
     /** Only an explicit Bluetooth selection ever opens SCO — AUTO/PHONE always use the phone mic. */
@@ -140,6 +177,7 @@ class VoiceEngine @Inject constructor(
         currentSettings.microphoneSource == MicrophoneSource.BLUETOOTH
 
     private suspend fun runContinuousSession() {
+        currentStage = "continuous_listening"
         voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
         serviceStateHolder.updateMode(ServiceMode.Listening)
 
@@ -167,6 +205,7 @@ class VoiceEngine @Inject constructor(
     }
 
     private suspend fun runWakeWordSession() {
+        currentStage = "waiting_wake_word"
         voiceStateHolder.updateEngineState(VoiceEngineState.WaitingWakeWord)
         voiceStateHolder.updateRemainingWindowSeconds(null)
         serviceStateHolder.updateMode(ServiceMode.Running)
@@ -179,6 +218,7 @@ class VoiceEngine @Inject constructor(
         // out-of-grammar noise, or this phase would churn the mic/SCO as
         // often as Continuous Mode does.
         val wakeAudioFlow = audioRecorder.start(allowBluetooth = false)
+        currentStage = "wake_word_detection"
         val detected = wakeWordDetector.waitForWakeWord(wakeAudioFlow)
         audioRecorder.stop()
 
@@ -189,21 +229,25 @@ class VoiceEngine @Inject constructor(
         }
 
         DjLogger.voice("Wake word detected — opening dialog window")
+        currentStage = "wake_word_activation_feedback"
         feedbackManager.onActivation()
         // Wake Word UX: hearing "Диджей" only opens the dialog window — it
         // never itself executes a command.
         voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
         serviceStateHolder.updateMode(ServiceMode.Listening)
+        currentStage = "overlay_show"
         voiceOverlayController.show("🎧 DJ — Слушаю...")
 
         // Active: this is "recording a voice command" — the configured mic
         // source applies, opening Bluetooth SCO only if explicitly selected,
         // and only for the duration of this dialog window.
+        currentStage = "dialog_window_audio_start"
         val commandAudioFlow = audioRecorder.start(allowBluetooth = resolveAllowBluetooth())
         val windowMs = currentSettings.dialogWindowSeconds * 1000L
         var windowDeadline = SystemClock.elapsedRealtime() + windowMs
         var switchRequested = false
 
+        currentStage = "dialog_window"
         coroutineScope {
             val collectJob = launch {
                 speechRecognizer.startListening(commandAudioFlow)
@@ -262,12 +306,32 @@ class VoiceEngine @Inject constructor(
         val extendWindow: Boolean
     )
 
+    /**
+     * Always leaves the engine state back at [VoiceEngineState.Listening] on
+     * the way out — every branch below used to reset it individually, and it
+     * was easy to add a new branch (e.g. the confidence-rejection path) that
+     * forgot to, leaving Debug Screen stuck showing "Processing"/"Executing"
+     * for the rest of the dialog window even though the engine had already
+     * moved on. A single `finally` makes that class of bug impossible.
+     */
     private suspend fun handleRecognition(result: RecognitionResult): RecognitionOutcome {
+        currentStage = "recognition_processing"
         voiceStateHolder.updateEngineState(VoiceEngineState.Processing)
         voiceOverlayController.updateStatus("🎧 DJ — Распознаю...")
         serviceStateHolder.updateMode(ServiceMode.Recognizing)
         val startTime = SystemClock.elapsedRealtime()
+        try {
+            return handleRecognitionInternal(result, startTime)
+        } finally {
+            currentStage = "recognition_processing"
+            voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
+        }
+    }
 
+    private suspend fun handleRecognitionInternal(
+        result: RecognitionResult,
+        startTime: Long
+    ): RecognitionOutcome {
         val rawText = result.text
         val normalizedText = TextNormalizer.normalize(rawText.stripWakeWord())
         val intent = intentRecognizer.recognize(rawText)
@@ -309,6 +373,7 @@ class VoiceEngine @Inject constructor(
             return RecognitionOutcome(modeSwitch = newMode, extendWindow = true)
         }
 
+        currentStage = "command_dispatch"
         voiceStateHolder.updateEngineState(VoiceEngineState.Executing)
         voiceOverlayController.updateStatus("🎧 DJ — Выполняю...")
         serviceStateHolder.updateMode(ServiceMode.Processing)
@@ -326,7 +391,6 @@ class VoiceEngine @Inject constructor(
         )
         serviceStateHolder.updateLastRecognizedText(rawText)
         val succeeded = commandResult is CommandResult.Success || commandResult is CommandResult.SuccessWithInfo
-        voiceStateHolder.updateEngineState(VoiceEngineState.Listening)
         return RecognitionOutcome(modeSwitch = null, extendWindow = succeeded)
     }
 

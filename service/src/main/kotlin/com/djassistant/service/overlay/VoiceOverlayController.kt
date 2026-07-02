@@ -8,6 +8,8 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -31,12 +33,27 @@ import javax.inject.Singleton
  *
  * Never blocks interaction with other apps: FLAG_NOT_TOUCHABLE +
  * FLAG_NOT_FOCUSABLE make it purely informational.
+ *
+ * IMPORTANT (Sprint 3.3 root-cause fix): [VoiceEngine] calls this controller
+ * from its own coroutine scope, which runs on [kotlinx.coroutines.Dispatchers.IO]
+ * — a plain background thread with no [Looper]. View mutation and
+ * [WindowManager.addView]/[WindowManager.removeView] both require a Looper
+ * on the calling thread; calling them directly from that coroutine crashed
+ * the whole app (not just this component) the moment the overlay was first
+ * shown, i.e. the instant the wake word was recognized. Every public method
+ * here therefore posts its work onto the main thread via [mainHandler]
+ * instead of executing inline, and all mutable view state is only ever
+ * touched from within a posted block, so there is no cross-thread access at
+ * all — not just a try/catch masking the symptom.
  */
 @Singleton
 class VoiceOverlayController @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Only ever read/written from within a block posted to mainHandler.
     private var overlayView: View? = null
     private var micDot: View? = null
     private var pulseAnimator: ValueAnimator? = null
@@ -45,21 +62,28 @@ class VoiceOverlayController @Inject constructor(
 
     private fun canDrawOverlay(): Boolean = Settings.canDrawOverlays(context)
 
-    @Synchronized
-    fun show(status: String) {
+    fun show(status: String) = runOnMain {
         if (!canDrawOverlay()) {
             DjLogger.service("Overlay: SYSTEM_ALERT_WINDOW not granted — skipping overlay")
-            return
+            return@runOnMain
         }
         if (overlayView != null) {
-            updateStatus(status)
-            return
+            updateStatusInternal(status)
+            return@runOnMain
         }
         val view = buildView()
         overlayView = view
         val params = layoutParams()
-        runCatching { windowManager.addView(view, params) }
-            .onFailure { DjLogger.serviceError("Overlay: failed to add view: ${it.message}") }
+        val added = runCatching { windowManager.addView(view, params) }
+            .onFailure { DjLogger.serviceError("Overlay: failed to add view", it) }
+            .isSuccess
+        if (!added) {
+            overlayView = null
+            statusText = null
+            countdownText = null
+            micDot = null
+            return@runOnMain
+        }
         view.alpha = 0f
         view.scaleX = 0.85f
         view.scaleY = 0.85f
@@ -68,18 +92,20 @@ class VoiceOverlayController @Inject constructor(
             .setDuration(220)
             .setInterpolator(OvershootInterpolator(1.2f))
             .start()
-        updateStatus(status)
+        updateStatusInternal(status)
         startPulse()
     }
 
-    @Synchronized
-    fun updateStatus(status: String) {
+    fun updateStatus(status: String) = runOnMain {
+        updateStatusInternal(status)
+    }
+
+    private fun updateStatusInternal(status: String) {
         statusText?.text = status
     }
 
-    @Synchronized
-    fun updateCountdown(seconds: Int?) {
-        val label = countdownText ?: return
+    fun updateCountdown(seconds: Int?) = runOnMain {
+        val label = countdownText ?: return@runOnMain
         if (seconds == null) {
             label.isVisible = false
         } else {
@@ -88,10 +114,13 @@ class VoiceOverlayController @Inject constructor(
         }
     }
 
-    @Synchronized
-    fun hide() {
-        val view = overlayView ?: return
+    fun hide() = runOnMain {
+        val view = overlayView ?: return@runOnMain
         stopPulse()
+        overlayView = null
+        statusText = null
+        countdownText = null
+        micDot = null
         view.animate()
             .alpha(0f).scaleX(0.85f).scaleY(0.85f)
             .setDuration(180)
@@ -101,14 +130,32 @@ class VoiceOverlayController @Inject constructor(
                 }
             })
             .start()
+    }
+
+    /** Immediately tears down the overlay with no animation — used when the engine is stopping. */
+    fun hideImmediately() = runOnMain {
+        val view = overlayView ?: return@runOnMain
+        stopPulse()
         overlayView = null
         statusText = null
         countdownText = null
         micDot = null
+        removeView(view)
+    }
+
+    private fun runOnMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runCatching(block).onFailure { DjLogger.serviceError("Overlay: error on main thread", it) }
+        } else {
+            mainHandler.post {
+                runCatching(block).onFailure { DjLogger.serviceError("Overlay: error on main thread", it) }
+            }
+        }
     }
 
     private fun removeView(view: View) {
         runCatching { windowManager.removeView(view) }
+            .onFailure { DjLogger.serviceError("Overlay: failed to remove view", it) }
     }
 
     private fun startPulse() {
