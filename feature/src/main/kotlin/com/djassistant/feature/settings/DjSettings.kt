@@ -2,7 +2,7 @@ package com.djassistant.feature.settings
 
 import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
-import com.djassistant.feature.voice.WakeWordPhrases
+import com.djassistant.feature.voice.wake.WakeWordPhrases
 
 data class DjSettings(
     val autoStartService: Boolean = false,
@@ -16,7 +16,7 @@ data class DjSettings(
     val microphoneSource: MicrophoneSource = MicrophoneSource.AUTO,
     /** Short activation/success/error beeps; can be muted entirely. */
     val soundFeedbackEnabled: Boolean = true,
-    /** Which [com.djassistant.feature.voice.WakeWordPhrase] Porcupine listens for in Wake Mode (Sprint 4). */
+    /** Which [com.djassistant.feature.voice.wake.WakeWordPhrase] Porcupine listens for in Wake Mode (Sprint 4). */
     val wakeWordPhraseId: String = WakeWordPhrases.DEFAULT.id,
     /**
      * User-supplied Picovoice Access Key (from https://console.picovoice.ai)

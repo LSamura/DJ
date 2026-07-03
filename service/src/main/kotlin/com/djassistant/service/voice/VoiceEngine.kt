@@ -20,7 +20,8 @@ import com.djassistant.feature.voice.RecognitionResult
 import com.djassistant.feature.voice.SpeechRecognizer
 import com.djassistant.feature.voice.TextNormalizer
 import com.djassistant.feature.voice.VoiceListeningMode
-import com.djassistant.feature.voice.WakeWordEngine
+import com.djassistant.feature.voice.wake.WakeWordEngine
+import com.djassistant.feature.voice.wake.WakeWordEvent
 import com.djassistant.service.ServiceMode
 import com.djassistant.service.ServiceStateHolder
 import com.djassistant.service.overlay.VoiceOverlayController
@@ -30,9 +31,11 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -56,26 +59,29 @@ import kotlinx.coroutines.launch
  * Supports two listening modes:
  *  - [VoiceListeningMode.CONTINUOUS] — full Vosk command grammar always
  *    running (Sprint 3 behavior, unchanged since).
- *  - [VoiceListeningMode.WAKE_WORD] — a dedicated [WakeWordEngine]
- *    (Porcupine, Sprint 4) listens for the activation phrase using its own
- *    lightweight detector, never Vosk; once triggered, Vosk is started
- *    just for a configurable Listening Window, resets on every
- *    successfully executed command, then Vosk is torn down again and
- *    control returns to [WakeWordEngine]. See ADR-037 in DECISIONS.md for
- *    why wake-word spotting and command recognition are two different
- *    engines rather than one doing both.
+ *  - [VoiceListeningMode.WAKE_WORD] — `Microphone -> WakeWordEngine ->
+ *    VoiceEngine -> IntentParser -> Media Layer` (Sprint 4). A dedicated
+ *    [WakeWordEngine] (Porcupine) owns the microphone and listens for the
+ *    activation phrase entirely on its own — this class only calls
+ *    [WakeWordEngine.start]/[WakeWordEngine.stop] and reacts to whatever
+ *    [WakeWordEvent] comes back; it has no idea how detection happens (see
+ *    ADR-037/039 in DECISIONS.md). Once a [WakeWordEvent.Detected] arrives,
+ *    Vosk is started just for a configurable Listening Window, resets on
+ *    every successfully executed command, then Vosk is torn down again and
+ *    [WakeWordEngine] is asked to start listening again.
  *
  * Mode-switch intents (SetContinuousMode/SetWakeMode) are handled here and
  * never reach [CommandDispatcher] — they are a Voice Layer concern, not a
  * Media Layer one.
  *
- * Bluetooth microphone lifecycle (Sprint 3.1 follow-up): the wake-word
- * waiting phase is a genuinely idle state and always uses the phone
- * microphone — it never opens a Bluetooth SCO connection. Only the "actually
- * recording a command" phase (the dialog window in Wake Mode, or the whole
- * session in Continuous Mode) opens SCO, and only when the user explicitly
- * selected [MicrophoneSource.BLUETOOTH]; it is closed the moment that
- * phase ends. See ADR in DECISIONS.md.
+ * Bluetooth microphone lifecycle: the wake-word waiting phase is a
+ * genuinely idle state and always uses the phone microphone — [WakeWordEngine]
+ * never opens a Bluetooth SCO connection (Sprint 4: this is now the Wake
+ * Layer's own responsibility, not this class's — see ADR-037/039). Only
+ * the "actually recording a command" phase (the dialog window in Wake
+ * Mode, or the whole session in Continuous Mode) opens SCO, and only when
+ * the user explicitly selected [MicrophoneSource.BLUETOOTH]; it is closed
+ * the moment that phase ends. See ADR in DECISIONS.md.
  */
 @Singleton
 class VoiceEngine @Inject constructor(
@@ -123,7 +129,7 @@ class VoiceEngine @Inject constructor(
         job = null
         audioRecorder.stop()
         speechRecognizer.release()
-        wakeWordEngine.release()
+        wakeWordEngine.destroy()
         voiceOverlayController.hideImmediately()
         voiceStateHolder.setModelLoaded(false)
         voiceStateHolder.updateRemainingWindowSeconds(null)
@@ -215,29 +221,33 @@ class VoiceEngine @Inject constructor(
         voiceStateHolder.updateRemainingWindowSeconds(null)
         serviceStateHolder.updateMode(ServiceMode.Running)
 
-        // Idle: waiting for the activation phrase is never a reason to touch
-        // Bluetooth — always the phone microphone here, regardless of the
-        // configured MicrophoneSource. Porcupine (see PorcupineWakeWordEngine)
-        // is cheap enough to keep this AudioRecord/detector session open for
-        // as long as it takes to hear the wake phrase — unlike the old
-        // Vosk-grammar approach, there is no restart-on-noise churn here at
-        // all, so this phase never needs to cycle the mic/SCO like
-        // Continuous Mode does.
-        val wakeAudioFlow = audioRecorder.start(allowBluetooth = false)
+        // Microphone -> WakeWordEngine -> VoiceEngine: the Wake Layer owns
+        // its own microphone session while listening (see WakeWordEngine
+        // doc / ADR-037/039) — VoiceEngine no longer touches AudioRecorder
+        // at all for this phase, it only starts the engine and reacts to
+        // whatever WakeWordEvent comes back. Subscribing via `async(start =
+        // CoroutineStart.UNDISPATCHED)` before calling start() guarantees
+        // the events collector is registered before the engine could
+        // possibly emit, since `events` is a hot SharedFlow with no replay.
         currentStage = "wake_word_detection"
-        val detected = wakeWordEngine.waitForWakeWord(wakeAudioFlow)
-        audioRecorder.stop()
+        val event = coroutineScope {
+            val eventDeferred = async(start = CoroutineStart.UNDISPATCHED) { wakeWordEngine.events.first() }
+            wakeWordEngine.start()
+            eventDeferred.await()
+        }
+        wakeWordEngine.stop()
 
-        if (!detected) {
-            if (!wakeWordEngine.isReady) {
-                DjLogger.voiceError("WakeWordEngine не готов (см. настройки Wake Word) — повтор через 2с")
-                voiceStateHolder.updateEngineState(VoiceEngineState.Error("Wake Word движок не настроен"))
+        val phrase = when (event) {
+            is WakeWordEvent.Error -> {
+                DjLogger.voiceError("WakeWordEngine: ${event.message}", event.throwable)
+                voiceStateHolder.updateEngineState(VoiceEngineState.Error("Wake Word: ${event.message}"))
                 delay(2_000)
+                return
             }
-            return
+            is WakeWordEvent.Detected -> event.phrase
         }
 
-        DjLogger.voice("Wake word detected — opening dialog window")
+        DjLogger.voice("Wake word detected (\"${phrase.displayName}\") — opening dialog window")
         currentStage = "wake_word_activation_feedback"
         feedbackManager.onActivation()
         // Wake Word UX: hearing "Диджей" only opens the dialog window — it

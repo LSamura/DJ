@@ -364,23 +364,40 @@ word) — headset оставался в режиме "звонка" горазд
 постоянно активным (индикатор использования микрофона Android горел не
 переставая), что ухудшало UX и усложняло управление Bluetooth SCO.
 
-**Решение:** отдельный, специализированный `WakeWordEngine` на базе
-Picovoice Porcupine. Vosk НЕ удалён — остаётся единственным движком
-распознавания голосовых КОМАНД; просто больше никогда не используется для
-ожидания wake word.
+**Решение:** отдельный Wake Layer (`feature/voice/wake`) со специализированным
+`WakeWordEngine` на базе Picovoice Porcupine. Vosk НЕ удалён — остаётся
+единственным движком распознавания голосовых КОМАНД; просто больше
+никогда не используется для ожидания wake word.
 
-- [x] `WakeWordEngine` — новая абстракция (`feature/voice`), заменяет
-      Sprint 3.x `WakeWordDetector`. `VoiceEngine` зависит только от
-      интерфейса — движок обнаружения можно заменить, не трогая
-      `VoiceEngine` (см. `MockWakeWordEngine` как доказательство)
-- [x] `PorcupineWakeWordEngine` — реальная реализация: конвертирует байтовый
-      поток `AudioRecorder` в кадры фиксированной длины
-      (`Porcupine.frameLength`), передаёт их в `porcupine.process()`,
-      создаёт/уничтожает нативный `Porcupine`-инстанс на каждую сессию
-      ожидания (та же схема, что и `AudioRecorder`-сессии — см. ADR-031/033)
-- [x] `MockWakeWordEngine` — тестовый дублёр: не делает реального анализа
-      звука, детектирует только по явному вызову `triggerDetection()` —
-      доказывает, что `VoiceEngine` не завязан на конкретный движок
+- [x] **Wake Layer** — новый пакет `feature/voice/wake` (в пределах
+      существующего Gradle-модуля `:feature` — граф из 6 модулей, ADR-002,
+      финальный и не пересматривался; "слой" здесь означает пакетную/
+      интерфейсную границу, а не новый Gradle-модуль): `WakeWordEngine`,
+      `WakeWordEngineState`, `WakeWordEvent`, `WakeWordPhrase`(s) и
+      реализации в `wake/impl`
+- [x] `WakeWordEngine` — интерфейс жизненного цикла + событий (не
+      suspend-функция, как в первой версии этого спринта):
+      `fun start()`, `fun stop()`, `fun destroy()`,
+      `val state: StateFlow<WakeWordEngineState>`,
+      `val events: SharedFlow<WakeWordEvent>`. Владеет собственной сессией
+      микрофона, пока активен — `VoiceEngine` больше не передаёт ему
+      `Flow<ByteArray>` и не открывает `AudioRecorder` для этой фазы сам
+      (диаграмма `Microphone → WakeWordEngine → VoiceEngine`)
+- [x] `WakeWordEngineState` — `IDLE` / `LISTENING` / `ERROR`
+- [x] `WakeWordEvent` — `Detected(phrase)` / `Error(message, throwable)`.
+      `WakeWordEngine` ничего не знает о `DjIntent`/командах — единственный
+      его словарь — "какую фразу я услышал, если услышал"
+- [x] `PorcupineWakeWordEngine` — реальная реализация: сам открывает
+      `AudioRecorder.start(allowBluetooth = false)`, конвертирует байтовый
+      поток в кадры фиксированной длины (`Porcupine.frameLength`), передаёт
+      их в `porcupine.process()`, создаёт/уничтожает нативный
+      `Porcupine`-инстанс и закрывает `AudioRecorder` на каждую сессию
+      `start()`/detection (та же схема, что и раньше — см. ADR-031/033)
+- [x] `MockWakeWordEngine` — тестовый дублёр: не трогает микрофон вообще,
+      `start()` просто переводит `state` в `LISTENING`; детектирует только
+      по явному вызову `triggerDetection()`/`triggerError()` — доказывает,
+      что `VoiceEngine` не завязан на конкретный движок ни через тип
+      аргумента, ни через побочный эффект работы с аудио
 - [x] `PorcupineAssetProvisioner` — копирует `.ppn`/`.pv` файлы из assets во
       внутреннее хранилище (та же схема, что `VoskModelProvisioner`)
 - [x] `WakeWordPhrase` + `WakeWordPhrases` — реестр активационных фраз.
@@ -388,24 +405,30 @@ Picovoice Porcupine. Vosk НЕ удалён — остаётся единств�
       подключена пока только "Диджей" — добавление "Музыка", "Ассистент"
       или пользовательской фразы позже не потребует переписывать
       `VoiceEngine` или архитектуру, только добавить запись в реестр + её
-      обученные ассеты
+      обученные ассеты (задел и на будущее хранение/переключение
+      нескольких моделей Porcupine — тот же реестр)
 - [x] Настройки: выбор Wake Word фразы (чипы, пока один вариант) + поле
       «Porcupine Access Key» (`DjSettings.wakeWordPhraseId`,
       `porcupineAccessKey`, персистится через DataStore)
 - [x] Новый голосовой конвейер в Wake Mode:
-      Microphone → Porcupine → Wake Word → beep + Overlay "Слушаю..." →
-      запуск Vosk → Listening Window (продлевается после каждой успешно
-      выполненной команды, как в Sprint 3.2/3.3) → Intent Parser → Media
-      Layer → остановка Vosk → release AudioRecord → возврат к Porcupine.
-      Реализовано переиспользованием уже существующей структуры
-      `runWakeWordSession()` — заменена только сама фаза ожидания
+      Microphone → WakeWordEngine (Porcupine) → событие `Detected` → beep +
+      Overlay "Слушаю..." → запуск Vosk → Listening Window (продлевается
+      после каждой успешно выполненной команды, как в Sprint 3.2/3.3) →
+      Intent Parser → Media Layer → остановка Vosk → release AudioRecord →
+      `wakeWordEngine.start()` снова
+- [x] `VoiceEngine.runWakeWordSession()`: подписка на `events` через
+      `async(start = CoroutineStart.UNDISPATCHED)` ДО вызова `start()` —
+      гарантирует, что коллектор зарегистрирован раньше, чем движок
+      теоретически успеет что-то эмитить (`events` — горячий `SharedFlow`
+      без replay, гонка была бы реальной без этого)
 - [x] Continuous Mode не тронут вообще — по-прежнему Vosk с полной
       грамматикой команд, без Porcupine, без wake word
 - [x] Bluetooth: фаза ожидания Porcupine всегда `allowBluetooth = false`
-      (как и раньше для wake-word ожидания); Listening Window и Continuous
-      Mode используют настроенный источник и закрывают SCO сразу по
-      завершении — поведение Bluetooth SCO не изменилось относительно
-      Sprint 3.1.1/3.3, поменялся только сам детектор ожидания
+      (теперь это ответственность самого Wake Layer, не `VoiceEngine`);
+      Listening Window и Continuous Mode используют настроенный источник и
+      закрывают SCO сразу по завершении — поведение Bluetooth SCO не
+      изменилось относительно Sprint 3.1.1/3.3, поменялся только владелец
+      микрофона в фазе ожидания
 - [x] Убран мёртвый код: параметр `vocabulary` в `SpeechRecognizer.startListening()`
       (существовал только для старой Vosk-грамматики wake word, теперь не
       вызывается нигде — Vosk всегда использует полную командную грамматику)

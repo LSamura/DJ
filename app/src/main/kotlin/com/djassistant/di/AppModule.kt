@@ -27,10 +27,10 @@ import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.settings.impl.DataStoreSettingsRepository
 import com.djassistant.feature.voice.AudioRecorder
 import com.djassistant.feature.voice.SpeechRecognizer
-import com.djassistant.feature.voice.WakeWordEngine
 import com.djassistant.feature.voice.impl.AndroidAudioRecorder
-import com.djassistant.feature.voice.impl.PorcupineWakeWordEngine
 import com.djassistant.feature.voice.impl.VoskSpeechRecognizer
+import com.djassistant.feature.voice.wake.WakeWordEngine
+import com.djassistant.feature.voice.wake.impl.PorcupineWakeWordEngine
 import com.djassistant.service.DjServiceController
 import com.djassistant.service.ServiceController
 import dagger.Binds

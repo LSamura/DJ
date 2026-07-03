@@ -49,7 +49,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
-import com.djassistant.feature.voice.WakeWordPhrases
+import com.djassistant.feature.voice.wake.WakeWordPhrases
 import com.djassistant.ui.permissions.NotificationAccess
 import com.djassistant.ui.permissions.OverlayAccess
 import com.djassistant.ui.theme.StatusRunning

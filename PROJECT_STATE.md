@@ -10,7 +10,7 @@ _Обновлено: 2026-07-01 | Sprint 4 (Dedicated Wake Word Engine — Porcu
 
 **⚠️ Важно (Sprint 3.2/3.3):** пользователь протестировал Sprint 3.2 на реальном устройстве и явно сообщил, что он не считается завершённым — приложение падало при произнесении "Диджей", Settings не прокручивался, а часть состояний Voice Layer зависала. Sprint 3.3 (Stabilization) устранил эти проблемы без добавления новых функций. По явному требованию пользователя Sprint 3.2 будет считаться завершённым только после успешного прохождения полного чек-листа на реальном устройстве — это ещё не подтверждено агентом (нет Android SDK/устройства в этой среде).
 
-**⚠️ Важно (Sprint 4):** Wake Mode теперь использует Porcupine вместо Vosk для ожидания wake word — это решает саму причину проблемы «микрофон постоянно активен» на архитектурном уровне (лёгкий детектор вместо полноценного ASR-движка на всё время простоя). НО: обученный keyword-файл (`.ppn`) для фразы "Диджей" и персональный Picovoice Access Key НЕ входят в репозиторий и не могут быть сгенерированы офлайн — пользователю нужно один раз получить их через console.picovoice.ai (см. `feature/src/main/assets/porcupine/README.md`) и указать Access Key в Настройках, прежде чем Wake Mode сможет реально обнаруживать "Диджей" на устройстве. До этого момента `PorcupineWakeWordEngine.isReady == false`, ошибка видна в Debug Screen, приложение не падает — но Wake Mode не будет срабатывать.
+**⚠️ Важно (Sprint 4):** Wake Mode теперь использует Porcupine вместо Vosk для ожидания wake word — это решает саму причину проблемы «микрофон постоянно активен» на архитектурном уровне (лёгкий детектор вместо полноценного ASR-движка на всё время простоя). НО: обученный keyword-файл (`.ppn`) для фразы "Диджей" и персональный Picovoice Access Key НЕ входят в репозиторий и не могут быть сгенерированы офлайн — пользователю нужно один раз получить их через console.picovoice.ai (см. `feature/src/main/assets/porcupine/README.md`) и указать Access Key в Настройках, прежде чем Wake Mode сможет реально обнаруживать "Диджей" на устройстве. До этого момента `PorcupineWakeWordEngine` эмитит `WakeWordEvent.Error` сразу после `start()`, ошибка видна в Debug Screen, приложение не падает — но Wake Mode не будет срабатывать.
 
 Проект:
 - Открывается в Android Studio
@@ -43,13 +43,18 @@ Media Layer (CommandDispatcher → уже существующий с Sprint 1/2
 ### Цепочка — Wake Mode (переработана в Sprint 4)
 
 ```
-Микрофон (AudioRecorder, allowBluetooth=false)
-    ↓ Flow<ByteArray>
-Porcupine (WakeWordEngine) — лёгкий детектор, НЕ Vosk
-    ↓ wake word detected
+VoiceEngine.wakeWordEngine.start()
+    ↓
+Microphone (открыт и владеется самим WakeWordEngine, allowBluetooth=false)
+    ↓
+Porcupine (WakeWordEngine, feature/voice/wake) — лёгкий детектор, НЕ Vosk
+    ↓ WakeWordEvent.Detected(phrase)
+VoiceEngine получает событие (events: SharedFlow), закрывает WakeWordEngine
+    ↓
 Beep (FeedbackManager.onActivation) + Overlay "Слушаю..."
     ↓
-Запуск Vosk (тот же SpeechRecognizer, что и в Continuous Mode)
+Запуск Vosk (тот же SpeechRecognizer, что и в Continuous Mode) —
+VoiceEngine сам открывает AudioRecorder для этой фазы
     ↓
 Listening Window (продлевается после каждой успешно выполненной команды)
     ↓ RecognitionResult
@@ -57,12 +62,17 @@ Intent Parser → Media Layer → CommandResult (как в Continuous Mode)
     ↓ окно закрылось
 Остановка Vosk, release AudioRecord
     ↓
-Возврат к Porcupine
+VoiceEngine.wakeWordEngine.start() снова
 ```
 
 Vosk остаётся единственным движком распознавания голосовых КОМАНД в обоих
-режимах — Sprint 4 меняет только то, чем именно ожидается сама
-активационная фраза в Wake Mode.
+режимах — Sprint 4 меняет только то, чем именно и через какой слой
+ожидается сама активационная фраза в Wake Mode. Слоистость буквально
+соответствует брифу: `Microphone → WakeWordEngine → VoiceEngine →
+IntentParser → Media Layer` — `WakeWordEngine` ничего не знает о командах,
+`VoiceEngine` ничего не знает о том, как именно произошло пробуждение
+(Porcupine, Mock или что угодно другое за тем же интерфейсом), Media Layer
+не зависит от Wake Layer вообще.
 
 ### Компоненты и их расположение
 
@@ -470,12 +480,36 @@ Processing/Executing → Sleep → WaitingWakeWord` (и `Idle` при полно
 для wake word (Picovoice Porcupine), оставив Vosk только для распознавания
 самих команд.
 
-### Новые файлы (`feature/voice`)
+### Wake Layer (`feature/voice/wake`) — новый пакет
 
-- **`WakeWordEngine`** — интерфейс, заменяет Sprint 3.x `WakeWordDetector`
-  (тот же общий контракт: `suspend fun waitForWakeWord(audioFlow): Boolean`,
-  плюс `isReady`/`release()` по образцу `SpeechRecognizer`). `VoiceEngine`
-  зависит только от этого интерфейса.
+Пользователь явно попросил «отдельный модуль Wake Layer». Граф Gradle-модулей
+(`app`/`core`/`data`/`feature`/`service`/`ui`) зафиксирован как финальный
+решением ADR-002 («пересмотр только по явному запросу») — этот явный запрос
+не касался графа модулей, поэтому Wake Layer реализован как отдельный пакет
+`feature/voice/wake` внутри существующего `:feature`, а не новый
+Gradle-модуль. Слоистость обеспечивается интерфейсами и границами пакетов
+(ровно так же, как `feature/voice`, `feature/intent`, `feature/command` уже
+были разными «слоями» внутри одного модуля с самого Sprint 1 — ADR-005/006).
+
+- **`WakeWordEngine`** — интерфейс жизненного цикла + событий (Sprint 4,
+  вторая итерация — заменяет suspend-контракт первой итерации того же
+  спринта, `waitForWakeWord(Flow<ByteArray>): Boolean`, на явный
+  lifecycle):
+  ```kotlin
+  interface WakeWordEngine {
+      val state: StateFlow<WakeWordEngineState>
+      val events: SharedFlow<WakeWordEvent>
+      fun start()
+      fun stop()
+      fun destroy()
+  }
+  ```
+  Владеет собственной микрофонной сессией, пока активен — `VoiceEngine`
+  вызывает только `start()`/`stop()`/`destroy()` и реагирует на `events`.
+- **`WakeWordEngineState`** — `IDLE` / `LISTENING` / `ERROR`.
+- **`WakeWordEvent`** — `Detected(phrase: WakeWordPhrase)` /
+  `Error(message, throwable)`. Никакого словаря команд — `WakeWordEngine`
+  не знает о `DjIntent` вообще.
 - **`WakeWordPhrase`** / **`WakeWordPhrases`** — реестр активационных фраз.
   Porcupine (в отличие от Vosk) не поддерживает открытый словарь — каждая
   фраза требует своего обученного `.ppn`-файла, поэтому "список
@@ -483,33 +517,47 @@ Processing/Executing → Sleep → WaitingWakeWord` (и `Idle` при полно
   как список строк. Сейчас в реестре только `WakeWordPhrases.DJ`
   ("Диджей"), но добавление "Музыка"/"Ассистент"/пользовательской фразы
   позже — это одна новая запись в реестре плюс её файлы, без изменений в
-  `VoiceEngine` или архитектуре в целом.
-- **`impl/PorcupineWakeWordEngine`** — реальная реализация. Конвертирует
-  байтовый PCM16 поток `AudioRecorder` в кадры фиксированной длины
-  (`Porcupine.frameLength`, обычно 512 сэмплов), скармливает их
-  `porcupine.process()`. Нативный `Porcupine`-инстанс создаётся и
-  уничтожается (`.delete()`) на каждый вызов `waitForWakeWord()` — та же
-  схема "сессия на фазу", что уже используется для `AudioRecorder`
-  (ADR-031) и для `VoiceOverlayController` (ADR-033), а не что-то новое.
+  `VoiceEngine` или архитектуре в целом. Тот же реестр — задел под будущее
+  «хранить несколько моделей, переключать активную через настройки»: это
+  уже ровно то, что `wakeWordPhraseId` + `WakeWordPhrases.ALL` делают
+  сегодня для одной фразы.
+- **`impl/PorcupineWakeWordEngine`** — реальная реализация. `start()`
+  запускает внутреннюю корутину, которая сама открывает
+  `AudioRecorder.start(allowBluetooth = false)`, конвертирует байтовый
+  PCM16 поток в кадры фиксированной длины (`Porcupine.frameLength`, обычно
+  512 сэмплов), скармливает их `porcupine.process()`. При детекции —
+  эмитит `WakeWordEvent.Detected`, закрывает `AudioRecorder`, уничтожает
+  нативный `Porcupine`-инстанс (`.delete()`) и возвращается в `IDLE`; при
+  ошибке (нет Access Key, нет ассетов, сбой инициализации) — эмитит
+  `WakeWordEvent.Error` вместо падения. Та же схема "сессия на фазу", что
+  уже используется для `AudioRecorder` (ADR-031) и для
+  `VoiceOverlayController` (ADR-033), просто теперь Wake Layer сам решает,
+  когда открывать эту сессию, а не получает её снаружи.
 - **`impl/PorcupineAssetProvisioner`** — копирует `.ppn`/`.pv` файлы из
   `assets/porcupine/` во внутреннее хранилище (та же схема, что
   `VoskModelProvisioner` уже использует для модели Vosk).
-- **`impl/MockWakeWordEngine`** — тестовый дублёр. Не анализирует звук
-  вообще: "детектирует" только по явному вызову `triggerDetection()`.
-  Существует, чтобы доказать (а не просто задекларировать), что
-  `VoiceEngine` действительно не завязан на конкретный движок — не
-  подключён в `AppModule` (используется только в тестах/превью).
+- **`impl/MockWakeWordEngine`** — тестовый дублёр. Не трогает микрофон и не
+  анализирует звук вообще: `start()` просто переводит `state` в
+  `LISTENING`; "детектирует" только по явному вызову `triggerDetection()`/
+  `triggerError()`. Существует, чтобы доказать (а не просто
+  задекларировать), что `VoiceEngine` действительно не завязан на
+  конкретный движок — не подключён в `AppModule` (используется только в
+  тестах/превью).
 
 ### Изменения в существующих файлах
 
-- **`VoiceEngine`** — поле `wakeWordDetector: WakeWordDetector` заменено на
-  `wakeWordEngine: WakeWordEngine`. Структура `runWakeWordSession()` почти
-  не изменилась (см. диаграмму выше в разделе "Wake Mode") — заменена
-  только сама фаза ожидания; beep/overlay/Listening Window/продление окна
-  после успешной команды/остановка Vosk и AudioRecord — всё уже было
-  реализовано в Sprint 3.2/3.3 и просто переиспользовано. Добавлена
-  явная обработка «движок не готов» (`wakeWordEngine.isReady == false`) —
-  логирует понятную ошибку и переводит состояние в `Error`, не крашится.
+- **`VoiceEngine.runWakeWordSession()`** — раньше сам открывал
+  `AudioRecorder` для фазы ожидания и звал
+  `wakeWordDetector.waitForWakeWord(flow)`; теперь только вызывает
+  `wakeWordEngine.start()` и ждёт первое событие из `wakeWordEngine.events`.
+  Подписка оформлена как
+  `async(start = CoroutineStart.UNDISPATCHED) { wakeWordEngine.events.first() }`,
+  запущенная ДО `start()` — гарантирует регистрацию коллектора раньше, чем
+  движок теоретически успеет что-то эмитить (`events` — горячий
+  `SharedFlow` без replay, реальная гонка была бы возможна без этого
+  приёма). Остальная структура (beep/overlay/Listening Window/продление
+  окна после успешной команды/остановка Vosk и AudioRecord) не изменилась
+  — всё это уже было реализовано в Sprint 3.2/3.3 и просто переиспользовано.
 - **`SpeechRecognizer.startListening()`** — убран параметр `vocabulary:
   List<String>?`. Он существовал только для старой Vosk-грамматики wake
   word; после переезда на Porcupine ни один вызывающий код больше не
@@ -522,11 +570,13 @@ Processing/Executing → Sleep → WaitingWakeWord` (и `Idle` при полно
   один вариант — реестр уже поддерживает больше) + поле ввода Access Key
   (`OutlinedTextField` с `PasswordVisualTransformation`, есть кнопка
   «Сохранить ключ»).
-- **`AppModule`** — `bindWakeWordDetector(VoskWakeWordDetector)` заменён на
-  `bindWakeWordEngine(PorcupineWakeWordEngine)`.
+- **`AppModule`** — `bindWakeWordEngine(PorcupineWakeWordEngine): WakeWordEngine`,
+  импорты обновлены на `feature.voice.wake`/`feature.voice.wake.impl`.
 - **Удалено:** `feature/voice/WakeWordDetector.kt` и
-  `feature/voice/impl/VoskWakeWordDetector.kt` — Vosk больше никогда не
-  используется для ожидания wake word.
+  `feature/voice/impl/VoskWakeWordDetector.kt` (Sprint 3.1) — Vosk больше
+  никогда не используется для ожидания wake word. Первая итерация Sprint 4
+  (`feature/voice/WakeWordEngine.kt` с suspend-контрактом) также заменена
+  версией из `feature/voice/wake/` — см. "Wake Layer" выше.
 
 ### Continuous Mode
 
@@ -537,11 +587,12 @@ Processing/Executing → Sleep → WaitingWakeWord` (и `Idle` при полно
 ### Bluetooth
 
 Поведение SCO не изменилось относительно Sprint 3.1.1/3.3 — поменялся
-только сам детектор, используемый в фазе ожидания. Фаза ожидания
-(теперь Porcupine, а не Vosk) по-прежнему всегда вызывает
-`audioRecorder.start(allowBluetooth = false)`; Listening Window и
-Continuous Mode по-прежнему используют `resolveAllowBluetooth()` и
-закрывают SCO сразу по завершении сессии записи.
+только владелец фазы ожидания. Раньше `VoiceEngine` сам вызывал
+`audioRecorder.start(allowBluetooth = false)` перед фазой ожидания; теперь
+это делает `PorcupineWakeWordEngine` внутри себя, но с тем же самым
+жёстким `allowBluetooth = false` без исключений. Listening Window и
+Continuous Mode по-прежнему используют `resolveAllowBluetooth()` (в
+`VoiceEngine`) и закрывают SCO сразу по завершении сессии записи.
 
 ### ⚠️ Ограничение — обязательно к прочтению перед тестированием на устройстве
 
@@ -554,10 +605,10 @@ Porcupine требует персонального **Access Key** (Picovoice, �
   под фразу "Диджей" на русском языке через Picovoice Console);
 - требуют интернета для одноразового получения (сам рантайм Porcupine
   после этого работает полностью офлайн, как и Vosk);
-- без них `PorcupineWakeWordEngine.isReady == false`, `waitForWakeWord()`
-  сразу возвращает `false` с понятным логом, `VoiceEngine` переходит в
-  `Error`-состояние вместо падения — но Wake Mode не сработает, пока
-  пользователь не выполнит одноразовую настройку.
+- без них `PorcupineWakeWordEngine.start()` сразу эмитит
+  `WakeWordEvent.Error` с понятным сообщением (через `state = ERROR`),
+  `VoiceEngine` переходит в `Error`-состояние вместо падения — но Wake
+  Mode не сработает, пока пользователь не выполнит одноразовую настройку.
 
 Точные шаги — `feature/src/main/assets/porcupine/README.md`.
 
@@ -765,10 +816,14 @@ Porcupine требует персонального **Access Key** (Picovoice, �
   per-session Bluetooth SCO), `SpeechRecognizer`/`VoskSpeechRecognizer`
   (реальный Vosk, всегда полная командная грамматика — Sprint 4 убрал
   параметр `vocabulary`), `GrammarBuilder`, `VoiceCommandConfigLoader`,
-  `VoskModelProvisioner`, `TextNormalizer`, `WakeWordEngine`/
-  `PorcupineWakeWordEngine`/`MockWakeWordEngine` (Sprint 4, заменяет
-  Sprint 3.1's `WakeWordDetector`/`VoskWakeWordDetector`), `WakeWordPhrase`/
-  `WakeWordPhrases`, `VoiceListeningMode` — все реализованы
+  `VoskModelProvisioner`, `TextNormalizer`, `VoiceListeningMode` — все
+  реализованы
+- **Wake Layer** (`feature/voice/wake`, новый пакет в Sprint 4):
+  `WakeWordEngine` (`start()`/`stop()`/`destroy()`/`state`/`events`),
+  `WakeWordEngineState`, `WakeWordEvent`, `WakeWordPhrase`/`WakeWordPhrases`,
+  `impl/PorcupineWakeWordEngine`, `impl/MockWakeWordEngine`,
+  `impl/PorcupineAssetProvisioner` — заменяет Sprint 3.1's
+  `WakeWordDetector`/`VoskWakeWordDetector`
 - **Intent**: `DjIntent` (16 вариантов, включая `SetVolumeMax/Min/Percent`,
   `SetContinuousMode`/`SetWakeMode`), `IntentRecognizer` /
   `KeywordIntentRecognizer` — словарь из `commands.json` + regex для

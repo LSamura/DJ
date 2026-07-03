@@ -6,6 +6,56 @@
 
 ---
 
+## [0.4.1] — 2026-07-01 — Sprint 4 (refined): Wake Layer architecture
+
+User follow-up on Sprint 4 pinned down the exact shape of the abstraction:
+`WakeWordEngine` moves from a suspend function
+(`waitForWakeWord(Flow<ByteArray>): Boolean`) to an explicit lifecycle +
+events interface, and wake-word code is organized as its own layer
+(`feature/voice/wake`) inside `:feature` rather than living alongside
+general voice utilities.
+
+**Changed:**
+- `WakeWordEngine` (now `feature/voice/wake`) — interface is
+  `fun start()`, `fun stop()`, `fun destroy()`,
+  `val state: StateFlow<WakeWordEngineState>` (`IDLE`/`LISTENING`/`ERROR`),
+  `val events: SharedFlow<WakeWordEvent>` (`Detected(phrase)`/
+  `Error(message, throwable)`). The engine now owns its own `AudioRecorder`
+  session while listening — callers no longer hand it a `Flow<ByteArray>`.
+  Diagram: `Microphone -> WakeWordEngine -> VoiceEngine -> IntentParser ->
+  Media Layer`.
+- `PorcupineWakeWordEngine` — `start()` launches an internal coroutine that
+  opens `AudioRecorder.start(allowBluetooth = false)` itself, runs
+  detection, and emits `WakeWordEvent.Detected`/`Error`; the microphone and
+  native Porcupine instance are torn down automatically once detection (or
+  an error) occurs.
+- `MockWakeWordEngine` — simplified to match: `start()` just flips `state`
+  to `LISTENING`; detection only ever happens via `triggerDetection()`/
+  `triggerError()`. Touches no audio at all, making the "VoiceEngine
+  doesn't care which engine it's talking to" claim more obviously true.
+- `VoiceEngine.runWakeWordSession()` — no longer opens `AudioRecorder` for
+  the wake-wait phase at all; calls `wakeWordEngine.start()`/`stop()` and
+  reacts to `events`. Subscribes via
+  `async(start = CoroutineStart.UNDISPATCHED) { wakeWordEngine.events.first() }`
+  *before* calling `start()`, closing a real race window (`events` is a hot
+  `SharedFlow` with no replay).
+
+**Unchanged:**
+- Continuous Mode, Bluetooth SCO behavior (only the *owner* of the
+  wake-wait microphone session moved, not when/how SCO opens or closes),
+  the Listening Window / beep / overlay / extend-on-success flow, the
+  `WakeWordPhrase`/`WakeWordPhrases` registry design, the Porcupine
+  Access Key/asset requirements.
+- Module graph (`app`/`core`/`data`/`feature`/`service`/`ui`, ADR-002) —
+  "Wake Layer" is a package (`feature/voice/wake`) inside `:feature`, not a
+  new Gradle module; the fixed graph wasn't the subject of this request.
+
+**Verification:** `./gradlew :feature:dependencies` still resolves cleanly
+after the package move; no Android SDK available to compile, same
+limitation as the initial Sprint 4 pass.
+
+---
+
 ## [0.4.0] — 2026-07-01 — Sprint 4: Dedicated Wake Word Engine (Porcupine)
 
 Wake Mode's wake-word spotting moves off Vosk entirely and onto a

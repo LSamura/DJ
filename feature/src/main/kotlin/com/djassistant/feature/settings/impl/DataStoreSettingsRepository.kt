@@ -13,7 +13,7 @@ import com.djassistant.feature.settings.DjSettings
 import com.djassistant.feature.settings.SettingsRepository
 import com.djassistant.feature.voice.MicrophoneSource
 import com.djassistant.feature.voice.VoiceListeningMode
-import com.djassistant.feature.voice.WakeWordPhrases
+import com.djassistant.feature.voice.wake.WakeWordPhrases
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton

@@ -1,8 +1,8 @@
-package com.djassistant.feature.voice.impl
+package com.djassistant.feature.voice.wake.impl
 
 import android.content.Context
 import com.djassistant.core.logging.DjLogger
-import com.djassistant.feature.voice.WakeWordPhrase
+import com.djassistant.feature.voice.wake.WakeWordPhrase
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
@@ -16,7 +16,7 @@ private const val TARGET_DIR_NAME = "porcupine"
  * Ensures a [WakeWordPhrase]'s Porcupine keyword (`.ppn`) and, if needed,
  * language model (`.pv`) files are available as plain files under internal
  * storage — the Porcupine SDK takes file paths, not asset streams, same
- * constraint [VoskModelProvisioner] works around for the Vosk model.
+ * constraint `VoskModelProvisioner` works around for the Vosk model.
  *
  * IMPORTANT: unlike the Vosk model, these files are NOT bundled in this
  * repository and cannot be generated offline — a Porcupine keyword file is

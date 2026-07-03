@@ -1,4 +1,4 @@
-package com.djassistant.feature.voice
+package com.djassistant.feature.voice.wake
 
 /**
  * One selectable activation phrase for Wake Mode.
@@ -7,12 +7,15 @@ package com.djassistant.feature.voice
  * specifically for each phrase — there is no generic "list of words" the
  * engine can just match against. So "supporting a list of phrases" means:
  * a registry of [WakeWordPhrase] entries, each pointing at its own trained
- * asset, with [DjSettings.wakeWordPhraseId] selecting which one is active.
- * Only [DJ] ("Диджей") ships today, but adding a new phrase later —
- * "Музыка", "Ассистент", a user's own custom wake word trained via the
- * Picovoice Console — is just adding another entry here plus its asset
- * files; nothing in [com.djassistant.service.voice.VoiceEngine] or the
- * settings UI needs to change.
+ * asset, with [com.djassistant.feature.settings.DjSettings.wakeWordPhraseId]
+ * selecting which one is active. Only [DJ] ("Диджей") ships today, but
+ * adding a new phrase later — "Музыка", "Ассистент", a user's own custom
+ * wake word trained via the Picovoice Console — is just adding another
+ * entry here plus its asset files; nothing in
+ * [com.djassistant.service.voice.VoiceEngine], [WakeWordEngine], or the
+ * settings UI needs to change. This is also the seam a future "several
+ * stored models, switch the active one, load a custom model" feature would
+ * extend — still just registry entries, still no Voice Layer changes.
  */
 data class WakeWordPhrase(
     val id: String,
